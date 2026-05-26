@@ -86,6 +86,7 @@ static int s_retry_num = 0;
 static EventGroupHandle_t s_wifi_event_group;
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
+#define WIFI_STA_CONNECT_TIMEOUT_MS 20000   //<- edit here for fallback time
 
 esp_netif_t *esp_default_netif;
 
@@ -182,6 +183,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
         set_client_static_ip();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        if (DB_PARAM_RADIO_MODE != DB_WIFI_MODE_STA) {
+            return;  // no longer in STA mode - ignore stale event
+        }
         ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED - Lost connection to access point");
         // Keep on trying
         if (!DB_RADIO_IS_OFF) {
@@ -264,6 +268,45 @@ esp_err_t init_fs(void) {
 #endif
 
 /**
+ * Configures and starts the AP after mode/netif are set up.
+ * Shared between initial AP init and STA->AP fallback.
+ */
+static void db_ap_setup_and_start(wifi_config_t *wifi_config, int wifi_mode) {
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    if (wifi_mode == DB_WIFI_MODE_AP_LR) {
+        ESP_LOGI(TAG, "Enabling LR Mode on access point. This device will be invisible to non-ESP32 devices!");
+        ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));
+    } else {
+        ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B));
+    }
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, wifi_config));
+    wifi_country_t wifi_country = {.cc = "US", .schan = 1, .nchan = 13, .policy = WIFI_COUNTRY_POLICY_MANUAL};
+    ESP_ERROR_CHECK(esp_wifi_set_country(&wifi_country));
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+
+    /* Start WiFi first — creates lwIP netif, DHCP auto-starts on default IP
+       (only when dhcps_status == INIT). Then stop DHCP, set custom IP, restart. */
+    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_netif_dhcps_stop(esp_default_netif));
+    esp_netif_ip_info_t ip;
+    memset(&ip, 0, sizeof(esp_netif_ip_info_t));
+    ip.ip.addr = ipaddr_addr(DB_PARAM_AP_IP);
+    ip.netmask.addr = ipaddr_addr("255.255.255.0");
+    ip.gw.addr = ipaddr_addr(DB_PARAM_AP_IP);
+    ESP_ERROR_CHECK(esp_netif_set_ip_info(esp_default_netif, &ip));
+    ESP_ERROR_CHECK(esp_netif_dhcps_start(esp_default_netif));
+    DB_RADIO_IS_OFF = false;
+
+    ESP_ERROR_CHECK(
+            esp_netif_set_hostname(esp_default_netif, (char *) db_param_wifi_hostname.value.db_param_str.value));
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-truncation"
+    strncpy(CURRENT_CLIENT_IP, DB_PARAM_AP_IP, sizeof(CURRENT_CLIENT_IP));
+#pragma GCC diagnostic pop
+    ESP_ERROR_CHECK(esp_read_mac(LOCAL_MAC_ADDRESS, ESP_MAC_WIFI_SOFTAP));
+}
+
+/**
  * Launches an access point where ground stations can connect to
  *
  * @param wifi_mode Allows to overwrite an AP mode from traditional WiFi to LR Mode
@@ -318,37 +361,7 @@ void db_init_wifi_apmode(int wifi_mode) {
     }
 #pragma GCC diagnostic pop
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-    if (wifi_mode == DB_WIFI_MODE_AP_LR) {
-        ESP_LOGI(TAG, "Enabling LR Mode on access point. This device will be invisible to non-ESP32 devices!");
-        ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));
-    } else {
-        ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B));
-    }
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
-    wifi_country_t wifi_country = {.cc = "US", .schan = 1, .nchan = 13, .policy = WIFI_COUNTRY_POLICY_MANUAL};
-    ESP_ERROR_CHECK(esp_wifi_set_country(&wifi_country));
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    DB_RADIO_IS_OFF = false; // just to be sure, but should not be necessary
-
-    /* Assign IP to ap/gateway */
-    esp_netif_ip_info_t ip;
-    memset(&ip, 0, sizeof(esp_netif_ip_info_t));
-    ip.ip.addr = ipaddr_addr(DB_PARAM_AP_IP);
-    ip.netmask.addr = ipaddr_addr("255.255.255.0");
-    ip.gw.addr = ipaddr_addr(DB_PARAM_AP_IP);
-    ESP_ERROR_CHECK(esp_netif_dhcps_stop(esp_default_netif));
-    ESP_ERROR_CHECK(esp_netif_set_ip_info(esp_default_netif, &ip));
-    ESP_ERROR_CHECK(esp_netif_dhcps_start(esp_default_netif));
-
-    ESP_ERROR_CHECK(
-            esp_netif_set_hostname(esp_default_netif, (char *) db_param_wifi_hostname.value.db_param_str.value));
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wstringop-truncation"
-    strncpy(CURRENT_CLIENT_IP, DB_PARAM_AP_IP, sizeof(CURRENT_CLIENT_IP));
-#pragma GCC diagnostic pop
-    ESP_ERROR_CHECK(esp_read_mac(LOCAL_MAC_ADDRESS, ESP_MAC_WIFI_SOFTAP));
+    db_ap_setup_and_start(&wifi_config, wifi_mode);
 }
 
 /**
@@ -432,27 +445,60 @@ int db_init_wifi_clientmode() {
                                            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                                            pdFALSE,
                                            pdFALSE,
-                                           portMAX_DELAY);
+                                            pdMS_TO_TICKS(WIFI_STA_CONNECT_TIMEOUT_MS));
 
-    /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
-     * happened. */
-    bool enable_temp_ap_mode = false;
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "Connected to ap SSID:%s password:%s", DB_PARAM_WIFI_SSID, DB_PARAM_PASS);
-    } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGW(TAG, "Failed to connect to SSID:%s, password:%s", DB_PARAM_WIFI_SSID, DB_PARAM_PASS);
-        enable_temp_ap_mode = true;
     } else {
-        ESP_LOGE(TAG, "UNEXPECTED WIFI EVENT");
-    }
-    if (enable_temp_ap_mode) {
-        ESP_LOGW(TAG, "WiFi client mode was not able to connect to the specified access point");
+        ESP_LOGW(TAG, "WiFi client mode failed to connect to SSID:%s", DB_PARAM_WIFI_SSID);
         return -1;
     }
 
     ESP_LOGI(TAG, "WiFi client mode enabled and connected!");
     ESP_ERROR_CHECK(esp_read_mac(LOCAL_MAC_ADDRESS, ESP_MAC_WIFI_STA));
     return 0;
+}
+
+/**
+ * Transitions from STA to AP mode when STA connection fails during boot.
+ * Stops WiFi, replaces the netif, configures as AP, and restarts.
+ * Does NOT re-init the wifi driver or event loop (already initialized).
+ */
+static void db_start_ap_fallback(void) {
+    ESP_LOGW(TAG, "STA connection failed - falling back to AP mode");
+
+    ESP_ERROR_CHECK(esp_wifi_stop());
+
+    esp_netif_destroy(esp_default_netif);
+    esp_default_netif = esp_netif_create_default_wifi_ap();
+    assert(esp_default_netif);
+
+    esp_event_handler_instance_t ap_staipassigned_ip;
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                                                        IP_EVENT_AP_STAIPASSIGNED,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        &ap_staipassigned_ip));
+
+    wifi_config_t wifi_config = {
+            .ap = {
+                    .ssid = "DroneBridge for ESP32",
+                    .password = "dronebridge",
+                    .ssid_len = 0,
+                    .authmode = WIFI_AUTH_WPA2_PSK,
+                    .channel = db_param_channel.value.db_param_u8.value,
+                    .ssid_hidden = 0,
+                    .beacon_interval = 100,
+                    .max_connection = 10,
+            },
+    };
+
+    db_ap_setup_and_start(&wifi_config, DB_WIFI_MODE_AP);
+
+    DB_PARAM_RADIO_MODE = DB_WIFI_MODE_AP;
+    DB_RADIO_MODE_DESIGNATED = DB_WIFI_MODE_AP;
+
+    ESP_LOGI(TAG, "Fallback AP started - SSID: \"DroneBridge for ESP32\", IP: %s", DB_PARAM_AP_IP);
 }
 
 /**
@@ -737,9 +783,9 @@ void app_main() {
 #endif
             break;
         default:
-            // Wi-Fi client mode with LR mode enabled
             if (db_init_wifi_clientmode() < 0) {
-                ESP_LOGE(TAG, "Failed to init Wifi Client Mode");
+                ESP_LOGW(TAG, "STA mode failed - starting AP fallback");
+                db_start_ap_fallback();
             }
             break;
     }
