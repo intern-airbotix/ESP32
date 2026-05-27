@@ -86,7 +86,7 @@ static int s_retry_num = 0;
 static EventGroupHandle_t s_wifi_event_group;
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
-#define WIFI_STA_CONNECT_TIMEOUT_MS 20000   //<- edit here for fallback time
+#define WIFI_STA_CONNECT_TIMEOUT_MS 80000   //<- edit here for fallback time
 
 esp_netif_t *esp_default_netif;
 
