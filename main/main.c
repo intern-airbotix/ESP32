@@ -476,7 +476,8 @@ static void db_start_ap_fallback(void) {
 
     ESP_ERROR_CHECK(esp_wifi_stop());
     DB_PARAM_RADIO_MODE = DB_WIFI_MODE_AP;
-    DB_RADIO_MODE_DESIGNATED = DB_WIFI_MODE_AP;
+    // DB_RADIO_MODE_DESIGNATED intentionally NOT overwritten — keep user's persisted preference (STA)
+    // so next reboot retries STA instead of getting stuck in AP forever.
 
     esp_netif_destroy(esp_default_netif);
     esp_default_netif = esp_netif_create_default_wifi_ap();
@@ -767,7 +768,6 @@ void app_main() {
     db_status_led_init();
 
     switch (DB_PARAM_RADIO_MODE) {
-        case DB_WIFI_MODE_AP:
         case DB_WIFI_MODE_AP_LR:
             db_init_wifi_apmode(DB_PARAM_RADIO_MODE);
             break;
@@ -788,7 +788,12 @@ void app_main() {
             db_init_wifi_apmode(DB_WIFI_MODE_AP);
 #endif
             break;
+        case DB_WIFI_MODE_AP:
         default:
+            // Always attempt STA first; fall back to AP after WIFI_STA_CONNECT_TIMEOUT_MS if STA can't connect.
+            // DESIGNATED is forced to STA so any subsequent settings-save persists STA in NVS (self-heals AP-poisoned NVS).
+            DB_PARAM_RADIO_MODE = DB_WIFI_MODE_STA;
+            DB_RADIO_MODE_DESIGNATED = DB_WIFI_MODE_STA;
             if (db_init_wifi_clientmode() < 0) {
                 ESP_LOGW(TAG, "STA mode failed - starting AP fallback");
                 db_start_ap_fallback();

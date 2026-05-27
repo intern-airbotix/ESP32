@@ -64,8 +64,8 @@ db_parameter_t db_param_radio_mode = {
         },
         .value = {
                 .db_param_u8 = {
-                        .value = DB_WIFI_MODE_AP,
-                        .default_value = DB_WIFI_MODE_AP,
+                        .value = DB_WIFI_MODE_STA,
+                        .default_value = DB_WIFI_MODE_STA,
                         .min = DB_WIFI_MODE_AP,
                         .max = DB_WIFI_MODE_END,
                 }
