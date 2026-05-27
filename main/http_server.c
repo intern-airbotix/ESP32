@@ -425,6 +425,19 @@ esp_err_t start_rest_server(const char *base_path) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.max_uri_handlers = 9;
+    // Stock HTTPD_DEFAULT_CONFIG() gives only ~4 usable client sockets (7 minus 3
+    // reserved internally) and refuses new connections when full. The frontend
+    // polls 4-6 req/s with HTTP keep-alive, which saturates that pool and trips
+    // its 1 s fetch timeout, causing the GUI's repeated "disconnect/reconnect".
+    config.max_open_sockets = 13;     // bounded by CONFIG_LWIP_MAX_SOCKETS=16, 3 reserved by httpd
+    config.lru_purge_enable = true;   // evict oldest idle socket on overflow, never refuse a new conn
+    // Keep idle HTTP keep-alive sockets open long enough that the frontend's
+    // 500 ms polling never finds the server has closed its side. Anything below
+    // ~5 s causes intermittent fetch failures the JS treats as a disconnect,
+    // which then triggers get_settings() and clobbers the form the user is typing in.
+    config.recv_wait_timeout = 60;
+    config.send_wait_timeout = 10;
+    config.backlog_conn = 8;
 
     ESP_LOGI(TAG, "Starting HTTP Server");
     REST_CHECK(httpd_start(&server, &config) == ESP_OK, "Start server failed", err_start);

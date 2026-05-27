@@ -174,6 +174,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     }
     // Wifi client mode events
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        if (DB_PARAM_RADIO_MODE != DB_WIFI_MODE_STA) {
+            return;
+        }
         ESP_LOGI(TAG, "WIFI_EVENT_STA_START - Wifi Started");
         if (!DB_RADIO_IS_OFF) {  // maybe the other task did set it in the meantime
             ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
@@ -277,7 +280,11 @@ static void db_ap_setup_and_start(wifi_config_t *wifi_config, int wifi_mode) {
         ESP_LOGI(TAG, "Enabling LR Mode on access point. This device will be invisible to non-ESP32 devices!");
         ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));
     } else {
-        ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B));
+        // Enable 11b/g/n so modern clients negotiate up to ~72 Mbps instead of being
+        // pinned to 11b CCK (1-11 Mbps). The slow link was the underlying reason the
+        // web GUI's polls were timing out >1 s and tripping the AbortController.
+        ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP,
+                WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N));
     }
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, wifi_config));
     wifi_country_t wifi_country = {.cc = "US", .schan = 1, .nchan = 13, .policy = WIFI_COUNTRY_POLICY_MANUAL};
@@ -468,6 +475,8 @@ static void db_start_ap_fallback(void) {
     ESP_LOGW(TAG, "STA connection failed - falling back to AP mode");
 
     ESP_ERROR_CHECK(esp_wifi_stop());
+    DB_PARAM_RADIO_MODE = DB_WIFI_MODE_AP;
+    DB_RADIO_MODE_DESIGNATED = DB_WIFI_MODE_AP;
 
     esp_netif_destroy(esp_default_netif);
     esp_default_netif = esp_netif_create_default_wifi_ap();
@@ -494,9 +503,6 @@ static void db_start_ap_fallback(void) {
     };
 
     db_ap_setup_and_start(&wifi_config, DB_WIFI_MODE_AP);
-
-    DB_PARAM_RADIO_MODE = DB_WIFI_MODE_AP;
-    DB_RADIO_MODE_DESIGNATED = DB_WIFI_MODE_AP;
 
     ESP_LOGI(TAG, "Fallback AP started - SSID: \"DroneBridge for ESP32\", IP: %s", DB_PARAM_AP_IP);
 }
