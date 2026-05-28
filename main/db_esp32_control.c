@@ -171,6 +171,20 @@ void db_send_to_all_udp_clients(const uint8_t *data, uint data_length) {
     if (udp_conn_list == NULL || udp_conn_list->udp_socket < 0) {
         return;
     }
+    if (udp_conn_list->size == 0 &&
+        (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP || DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP_LR)) {
+        // No registered UDP clients yet — broadcast so GCS (e.g. Mission Planner) can auto-detect the MAVLink stream
+        // without needing to send a packet first. Only in AP mode to avoid broadcast storms on upstream routers in STA mode.
+        // (SO_BROADCAST is already enabled on this socket at creation in db_open_serial_udp_socket)
+        struct sockaddr_in broadcast_addr = {
+            .sin_family = AF_INET,
+            .sin_port = htons(APP_PORT_PROXY_UDP),
+            .sin_addr.s_addr = htonl(INADDR_BROADCAST),
+        };
+        sendto(udp_conn_list->udp_socket, data, data_length, 0,
+               (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr));
+        return;
+    }
     for (int i = 0; i < udp_conn_list->size; i++) {  // send to all UDP clients
         int sent = sendto(udp_conn_list->udp_socket, data, data_length, 0,
                           (struct sockaddr *) &udp_conn_list->db_udp_clients[i].udp_client,
@@ -549,7 +563,8 @@ _Noreturn void control_module_esp_now() {
  * @param sta_list
  */
 void db_send_internal_telemetry_to_stations(int tel_sock, wifi_sta_list_t *sta_list, udp_conn_list_t *udp_conns) {
-    if (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP_LR && udp_conns->size > 0 && sta_list->num > 0) {
+    if ((DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP_LR || DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP)
+        && udp_conns->size > 0 && sta_list->num > 0) {
         char addr_buf[32] = {0};
         struct addrinfo hints = {
                 .ai_flags = AI_PASSIVE,
@@ -746,8 +761,6 @@ _Noreturn void control_module_udp_tcp() {
         read_process_serial_link(connected_tcp_clients, &transparent_buff_pos, &msp_ltm_buff_pos, msp_message_buffer,
                                  serial_buffer,
                                  &db_msp_ltm_port);
-        if (serial_total_byte_count != prev_serial_count) data_processed = true;
-
         if (serial_total_byte_count != prev_serial_count) data_processed = true;
 
         if (delay_timer_cnt >= 6000) {

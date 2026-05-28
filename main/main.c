@@ -665,7 +665,7 @@ void db_read_settings_nvs() {
             // there was a saved UDP client in the NVM from last session - add it to the udp clients list
             ESP_LOGI(TAG, "Adding %s:%i to known UDP clients.",
                      (char *) db_param_udp_client_ip.value.db_param_str.value,
-                     db_param_udp_client_port.value.db_param_u8.value);
+                     db_param_udp_client_port.value.db_param_u16.value);
             struct sockaddr_in new_sockaddr;
             memset(&new_sockaddr, 0, sizeof(new_sockaddr));
             new_sockaddr.sin_family = AF_INET;

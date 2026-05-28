@@ -338,7 +338,7 @@ static esp_err_t system_stats_get_handler(httpd_req_t *req) {
         char ip_string[INET_ADDRSTRLEN];
         char ip_port_string[INET_ADDRSTRLEN+10];
         inet_ntop(AF_INET, &(udp_conn_list->db_udp_clients[i].udp_client.sin_addr), ip_string, INET_ADDRSTRLEN);
-        sprintf(ip_port_string, "%s:%d", ip_string, htons (udp_conn_list->db_udp_clients[i].udp_client.sin_port));
+        snprintf(ip_port_string, sizeof(ip_port_string), "%s:%d", ip_string, htons(udp_conn_list->db_udp_clients[i].udp_client.sin_port));
         cJSON_AddItemToArray(udp_clients, cJSON_CreateString(ip_port_string));
     }
     cJSON_AddItemToObject(root, "udp_clients", udp_clients);
@@ -387,7 +387,7 @@ static esp_err_t system_clients_get_handler(httpd_req_t *req) {
         char ip_string[INET_ADDRSTRLEN];
         char ip_port_string[INET_ADDRSTRLEN+10];
         inet_ntop(AF_INET, &(udp_conn_list->db_udp_clients[i].udp_client.sin_addr), ip_string, INET_ADDRSTRLEN);
-        sprintf(ip_port_string, "%s:%d", ip_string, htons (udp_conn_list->db_udp_clients[i].udp_client.sin_port));
+        snprintf(ip_port_string, sizeof(ip_port_string), "%s:%d", ip_string, htons(udp_conn_list->db_udp_clients[i].udp_client.sin_port));
         cJSON_AddItemToArray(udp_clients, cJSON_CreateString(ip_port_string));
     }
     cJSON_AddItemToObject(root, "udp_clients", udp_clients);

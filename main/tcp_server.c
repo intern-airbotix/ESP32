@@ -21,6 +21,7 @@
 #include "esp_log.h"
 #include "lwip/err.h"
 #include "lwip/sockets.h"
+#include "globals.h"
 
 #define TCP_TAG "TCP_SERVER_SETUP"
 
@@ -56,15 +57,32 @@ int open_tcp_server(int port) {
     return listen_sock;
 }
 
-void db_send_to_all_tcp_clients(const int tcp_clients[], uint8_t data[], uint data_length) {
+void db_send_to_all_tcp_clients(int tcp_clients[], uint8_t data[], uint data_length) {
     for (int i = 0; i < CONFIG_LWIP_MAX_ACTIVE_TCP; i++) {
         if (tcp_clients[i] > 0) {
             ESP_LOGD(TCP_TAG, "Sending %i bytes", data_length);
-            int err = write(tcp_clients[i], data, data_length);
-            if (err < 0) {
-                ESP_LOGE(TCP_TAG, "Error occurred during sending: %d", errno);
+            int total_sent = 0;
+            bool dead = false;
+            while (total_sent < (int) data_length) {
+                int sent = write(tcp_clients[i], data + total_sent, data_length - total_sent);
+                if (sent < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        // Non-blocking buffer full — accept truncated frame rather than spin
+                        ESP_LOGD(TCP_TAG, "TCP EAGAIN fd=%d after %d/%d bytes", tcp_clients[i], total_sent, data_length);
+                    } else {
+                        // Real error (ECONNRESET, EPIPE…) — remove dead client
+                        ESP_LOGW(TCP_TAG, "TCP send error fd=%d errno=%d — removing client", tcp_clients[i], errno);
+                        shutdown(tcp_clients[i], 0);
+                        close(tcp_clients[i]);
+                        tcp_clients[i] = -1;
+                        num_connected_tcp_clients--;
+                        dead = true;
+                    }
+                    break;
+                }
+                total_sent += sent;
             }
+            (void) dead; // used only for early break logic above
         }
     }
-
 }

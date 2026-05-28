@@ -890,7 +890,9 @@ bool db_param_is_valid_i32(const int32_t new_i32_value, db_parameter_t *target_p
  */
 bool db_param_is_valid_assign_str(char *new_string_value, db_parameter_t *target_param) {
     if (db_param_is_valid_str(new_string_value, target_param)) {
-        strncpy((char *) target_param->value.db_param_str.value, new_string_value, DB_PARAM_VALUE_MAXLEN);
+        strncpy((char *) target_param->value.db_param_str.value, new_string_value,
+                target_param->value.db_param_str.max_len - 1);
+        target_param->value.db_param_str.value[target_param->value.db_param_str.max_len - 1] = '\0';
         return true;
     } else {
         // new value is not valid - do not assign
