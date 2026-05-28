@@ -21,53 +21,41 @@ function change_radio_dis_arm_visibility() {
 }
 
 function change_ap_ip_visibility() {
-	const esp32Mode = document.getElementById("esp32_mode").value;
-	const elements = {
-		ap_ip_div: document.getElementById("ap_ip_div"),
-		ap_channel_div: document.getElementById("ap_channel_div"),
-		lr_disclaimer_div: document.getElementById("esp-lr-ap-disclaimer"),
-		ble_disclaimer_div: document.getElementById("ble_disclaimer_div"),
-		wifi_ssid_div: document.getElementById("wifi_ssid_div"),
-		wifi_en_gn_div: document.getElementById("wifi_en_gn_div"),
+	const mode = document.getElementById("esp32_mode").value;
+	const el = {
+		ap_ip_div:            document.getElementById("ap_ip_div"),
+		ap_channel_div:       document.getElementById("ap_channel_div"),
+		lr_disclaimer_div:    document.getElementById("esp-lr-ap-disclaimer"),
+		ble_disclaimer_div:   document.getElementById("ble_disclaimer_div"),
+		sta_section_div:      document.getElementById("sta_section_div"),
+		ap_section_div:       document.getElementById("ap_section_div"),
+		wifi_en_gn_div:       document.getElementById("wifi_en_gn_div"),
 		static_ip_config_div: document.getElementById("static_ip_config_div"),
-		pass_div: document.getElementById("pass_div"),
 	};
 
-	if (esp32Mode === "2") {
-		elements.ap_ip_div.style.display = "none";
-		elements.ap_channel_div.style.display = "none";
-		elements.wifi_en_gn_div.style.display = "block";
-		elements.static_ip_config_div.style.display = "block";
-	} else {
-		elements.ap_ip_div.style.display = "block";
-		elements.ap_channel_div.style.display = "block";
-		elements.wifi_en_gn_div.style.display = "none";
-		elements.static_ip_config_div.style.display = "none";
-	}
+	// hide everything, then selectively show per mode
+	Object.values(el).forEach(e => { e.style.display = "none"; });
 
-	if (esp32Mode === "6") {
-		elements.ble_disclaimer_div.style.display = "block";
-		elements.wifi_ssid_div.style.display = "none";
-		elements.ap_channel_div.style.display = "none";
-		elements.pass_div.style.display = "none";
-		elements.ap_ip_div.style.display = "none";
-	} else {
-		elements.ble_disclaimer_div.style.display = "none";
-		elements.wifi_ssid_div.style.display = "block";
-		elements.pass_div.style.display = "block";
-	}
-
-	if (esp32Mode > "2" && esp32Mode < "6") {
-		elements.lr_disclaimer_div.style.display = "block";
-	} else {
-		elements.lr_disclaimer_div.style.display = "none";
-	}
-
-	if (esp32Mode > "3" && esp32Mode < "6") {
-		elements.ap_ip_div.style.display = "none";
-		elements.wifi_ssid_div.style.visibility = "hidden";
-	} else {
-		elements.wifi_ssid_div.style.visibility = "visible";
+	if (mode === "2") {
+		// Wi-Fi STA + AP fallback: show all credential sections and all AP config
+		el.sta_section_div.style.display      = "block";
+		el.ap_section_div.style.display       = "block";
+		el.ap_ip_div.style.display            = "block";
+		el.ap_channel_div.style.display       = "block";
+		el.wifi_en_gn_div.style.display       = "block";
+		el.static_ip_config_div.style.display = "block";
+	} else if (mode === "3") {
+		// AP LR: AP credentials + channel + IP only
+		el.ap_section_div.style.display    = "block";
+		el.ap_ip_div.style.display         = "block";
+		el.ap_channel_div.style.display    = "block";
+		el.lr_disclaimer_div.style.display = "block";
+	} else if (mode === "4" || mode === "5") {
+		// ESP-NOW: no SSID/pass needed
+		el.lr_disclaimer_div.style.display = "block";
+	} else if (mode === "6") {
+		// BLE: no SSID/pass needed
+		el.ble_disclaimer_div.style.display = "block";
 	}
 	change_radio_dis_arm_visibility();
 }
@@ -133,8 +121,8 @@ function toJSONString(form) {
 		let element = elements[i]
 		let name = element.name;
 		let value = element.value;
-		// parse numbers as numbers except for the SSID and the password fields
-		if (!isNaN(Number(value)) && (name.localeCompare("wifi_ssid") !== 0) && (name.localeCompare("wifi_pass") !== 0)) {
+		// parse numbers as numbers except for SSID and password fields
+		if (!isNaN(Number(value)) && name !== "ssid" && name !== "wifi_pass" && name !== "sta_ssid" && name !== "sta_pass") {
 			if (name) {
 				obj[name] = parseInt(value)
 			}
@@ -450,9 +438,14 @@ function show_toast(msg, background_color = "#0058a6") {
 
 function check_validity() {
 	let valid = true;
-	let wifi_pass = document.getElementById("wifi_pass")
+	let wifi_pass = document.getElementById("wifi_pass");
+	let sta_pass  = document.getElementById("sta_pass");
 	if (!wifi_pass.checkValidity()) {
-		show_toast("Error: 8<(password length)<64");
+		show_toast("Error: AP password must be 8-63 characters");
+		valid = false;
+	}
+	if (document.getElementById("esp32_mode").value === "2" && !sta_pass.checkValidity()) {
+		show_toast("Error: STA password must be 8-63 characters");
 		valid = false;
 	}
 	return valid;

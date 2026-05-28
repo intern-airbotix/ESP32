@@ -63,8 +63,7 @@
                 <div class="twelve columns">
                     <label for="esp32_mode">ESP32 Mode</label>
                     <select id="esp32_mode" name="esp32_mode" form="settings_form" onchange="change_ap_ip_visibility()">
-                        <option value="1">Wi-Fi Access Point Mode</option>
-                        <option value="2">Wi-Fi Client Mode</option>
+                        <option value="2">Wi-Fi (STA + AP fallback)</option>
                         <option value="3">Wi-Fi Access Point LR Mode</option>
                         <option value="4">ESP-NOW LR Mode AIR</option>
                         <option value="5">ESP-NOW LR Mode GND</option>
@@ -86,14 +85,30 @@
                     </div>
                 </div>
             </div>
-            <div class="row">
-                <div class="six columns" id="wifi_ssid_div">
-                    <label for="ssid">SSID</label>
-                    <input type="text" name="ssid" value="" id="ssid" maxlength="31">
+            <div id="sta_section_div">
+                <p style="margin-bottom:0.5rem;font-weight:600;color:#555;">STA Configuration <small style="font-weight:400;">(network to connect to)</small></p>
+                <div class="row">
+                    <div class="six columns">
+                        <label for="sta_ssid">STA SSID</label>
+                        <input type="text" name="sta_ssid" value="" id="sta_ssid" maxlength="31">
+                    </div>
+                    <div class="six columns">
+                        <label for="sta_pass">STA Password</label>
+                        <input type="text" name="sta_pass" value="" id="sta_pass" minlength="8" maxlength="63">
+                    </div>
                 </div>
-                <div class="six columns" id="pass_div">
-                    <label for="wifi_pass">Password</label>
-                    <input type="text" name="wifi_pass" value="" id="wifi_pass" minlength="8" maxlength="63" required>
+            </div>
+            <div id="ap_section_div">
+                <p style="margin-bottom:0.5rem;font-weight:600;color:#555;">AP Configuration <small style="font-weight:400;">(hotspot created on fallback)</small></p>
+                <div class="row">
+                    <div class="six columns" id="wifi_ssid_div">
+                        <label for="ssid">AP SSID</label>
+                        <input type="text" name="ssid" value="" id="ssid" maxlength="31">
+                    </div>
+                    <div class="six columns" id="pass_div">
+                        <label for="wifi_pass">AP Password</label>
+                        <input type="text" name="wifi_pass" value="" id="wifi_pass" minlength="8" maxlength="63" required>
+                    </div>
                 </div>
             </div>
             <div class="row">

@@ -408,20 +408,18 @@ int db_init_wifi_clientmode() {
     };
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstringop-truncation"
-    // Set Wi-Fi SSID and password from the stored parameters
-    if (strlen(DB_PARAM_WIFI_SSID) >= db_param_ssid.value.db_param_str.min_len) {
-        strncpy((char *) wifi_config.ap.ssid, DB_PARAM_WIFI_SSID, db_param_ssid.value.db_param_str.max_len);
+    // Set Wi-Fi SSID and password from the stored STA parameters
+    if (strlen(DB_PARAM_STA_SSID) >= db_param_sta_ssid.value.db_param_str.min_len) {
+        strncpy((char *) wifi_config.sta.ssid, DB_PARAM_STA_SSID, db_param_sta_ssid.value.db_param_str.max_len);
     } else {
-        // something is wrong - switch to default value
-        strncpy((char *) wifi_config.ap.ssid, (char *) db_param_ssid.value.db_param_str.default_value,
-                db_param_ssid.value.db_param_str.max_len);
+        strncpy((char *) wifi_config.sta.ssid, (char *) db_param_sta_ssid.value.db_param_str.default_value,
+                db_param_sta_ssid.value.db_param_str.max_len);
     }
-    if (strlen(DB_PARAM_PASS) >= db_param_pass.value.db_param_str.min_len) {
-        strncpy((char *) wifi_config.ap.password, DB_PARAM_PASS, db_param_pass.value.db_param_str.max_len);
+    if (strlen(DB_PARAM_STA_PASS) >= db_param_sta_pass.value.db_param_str.min_len) {
+        strncpy((char *) wifi_config.sta.password, DB_PARAM_STA_PASS, db_param_sta_pass.value.db_param_str.max_len);
     } else {
-        // something is wrong - switch to default value
-        strncpy((char *) wifi_config.ap.password, (char *) db_param_pass.value.db_param_str.default_value,
-                db_param_pass.value.db_param_str.max_len);
+        strncpy((char *) wifi_config.sta.password, (char *) db_param_sta_pass.value.db_param_str.default_value,
+                db_param_sta_pass.value.db_param_str.max_len);
     }
 #pragma GCC diagnostic pop
 
@@ -444,7 +442,7 @@ int db_init_wifi_clientmode() {
     // Consider connection lost after 1s of no beacon - triggers reconnect via WIFI_EVENT_STA_DISCONNECTED event
     ESP_ERROR_CHECK(esp_wifi_set_inactive_time(WIFI_IF_STA, 3));
 
-    ESP_LOGI(TAG, "Init of WiFi Client-Mode finished. (SSID: %s PASS: %s)", DB_PARAM_WIFI_SSID, DB_PARAM_PASS);
+    ESP_LOGI(TAG, "Init of WiFi Client-Mode finished. (STA SSID: %s)", DB_PARAM_STA_SSID);
 
     /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
      * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
@@ -492,8 +490,8 @@ static void db_start_ap_fallback(void) {
 
     wifi_config_t wifi_config = {
             .ap = {
-                    .ssid = "DroneBridge for ESP32",
-                    .password = "dronebridge",
+                    .ssid = "",  // filled below from stored AP params
+                    .password = "",
                     .ssid_len = 0,
                     .authmode = WIFI_AUTH_WPA2_PSK,
                     .channel = db_param_channel.value.db_param_u8.value,
@@ -502,10 +500,25 @@ static void db_start_ap_fallback(void) {
                     .max_connection = 10,
             },
     };
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-truncation"
+    if (strlen(DB_PARAM_WIFI_SSID) >= db_param_ssid.value.db_param_str.min_len) {
+        strncpy((char *) wifi_config.ap.ssid, DB_PARAM_WIFI_SSID, db_param_ssid.value.db_param_str.max_len);
+    } else {
+        strncpy((char *) wifi_config.ap.ssid, (char *) db_param_ssid.value.db_param_str.default_value,
+                db_param_ssid.value.db_param_str.max_len);
+    }
+    if (strlen(DB_PARAM_PASS) >= db_param_pass.value.db_param_str.min_len) {
+        strncpy((char *) wifi_config.ap.password, DB_PARAM_PASS, db_param_pass.value.db_param_str.max_len);
+    } else {
+        strncpy((char *) wifi_config.ap.password, (char *) db_param_pass.value.db_param_str.default_value,
+                db_param_pass.value.db_param_str.max_len);
+    }
+#pragma GCC diagnostic pop
 
     db_ap_setup_and_start(&wifi_config, DB_WIFI_MODE_AP);
 
-    ESP_LOGI(TAG, "Fallback AP started - SSID: \"DroneBridge for ESP32\", IP: %s", DB_PARAM_AP_IP);
+    ESP_LOGI(TAG, "Fallback AP started - SSID: \"%s\", IP: %s", DB_PARAM_WIFI_SSID, DB_PARAM_AP_IP);
 }
 
 /**

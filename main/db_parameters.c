@@ -45,7 +45,8 @@ uint8_t DB_RADIO_MODE_DESIGNATED = DB_WIFI_MODE_AP; // initially assign the same
 
 /* ---------- String based parameters - not available via MAVLink ---------- */
 
-db_parameter_t db_param_ssid, db_param_pass, db_param_wifi_ap_ip, db_param_wifi_sta_ip, db_param_wifi_sta_gw,
+db_parameter_t db_param_ssid, db_param_pass, db_param_sta_ssid, db_param_sta_pass,
+    db_param_wifi_ap_ip, db_param_wifi_sta_ip, db_param_wifi_sta_gw,
     db_param_wifi_sta_netmask, db_param_udp_client_ip, db_param_wifi_hostname = {0};
 
 /* ---------- From here with increasing param_index all parameters that are also available via MAVLink ---------- */
@@ -476,10 +477,14 @@ db_parameter_t db_param_init_str_param(char *db_name, char *mav_param_name, cons
  * Add new parameters here!
  */
 void db_param_init_parameters() {
-    // Wi-Fi AP SSID name OR Wi-Fi AP SSID name to connect to in Wi-Fi client mode
+    // AP SSID — name of the hotspot the ESP32 creates (normal AP mode or STA fallback)
     db_param_ssid = db_param_init_str_param("ssid", "SYS_SSID", "DroneBridge for ESP32", 1, MAX_SSID_LEN);
-    // Password for Wi-Fi connections & ESP-NOW encryption.
+    // AP password
     db_param_pass = db_param_init_str_param("wifi_pass", "SYS_PASS", "dronebridge", 7, 64);
+    // STA SSID — network the ESP32 connects to in client mode
+    db_param_sta_ssid = db_param_init_str_param("sta_ssid", "SYS_STA_SSID", "DroneBridge STA", 1, MAX_SSID_LEN);
+    // STA password
+    db_param_sta_pass = db_param_init_str_param("sta_pass", "SYS_STA_PASS", "dronebridge", 8, 64);
     // IPv4 of the Wi-Fi access point when in Wi-Fi AP mode
     db_param_wifi_ap_ip = db_param_init_str_param("ap_ip", "WIFI_AP_IP", "192.168.2.1", 8, IP4ADDR_STRLEN_MAX);
     // User can specify static IP when in Wi-Fi client mode. If this is empty use auto IP.
@@ -496,6 +501,8 @@ void db_param_init_parameters() {
     db_parameter_t *db_params_l[] = {
             &db_param_ssid,
             &db_param_pass,
+            &db_param_sta_ssid,
+            &db_param_sta_pass,
             &db_param_wifi_ap_ip,
             &db_param_wifi_sta_ip,
             &db_param_wifi_sta_gw,
