@@ -2,6 +2,8 @@ const ROOT_URL = window.location.href       // for production code
 // const ROOT_URL = "http://localhost:3000/"   // for testing with local json server
 let conn_status = 0;		// connection status to the ESP32
 let old_conn_status = 0;	// connection status before last update of UI to know when it changed
+let ever_connected = false;	// true after first successful connection (used to gate initial settings load)
+let disconnect_time = 0;	// timestamp of when we went offline (ms); 0 = currently online
 let serial_via_JTAG = 0;	// set to 1 if ESP32 is using the USB interface as serial interface for data and not using the UART. If 0 we set UART config to invisible for the user.
 let last_byte_count = 0;
 let last_timestamp_byte_count = 0;
@@ -243,12 +245,25 @@ function update_conn_status() {
 		document.getElementById("current_client_ip").innerHTML = ""
 	}
 	if (conn_status !== old_conn_status) {
-		// connection status changed. Update settings and UI
-		get_system_info();
-		get_settings();
-		setTimeout(change_msp_ltm_visibility, 500);
-		setTimeout(change_ap_ip_visibility, 500);
-		setTimeout(change_uart_visibility, 500);
+		if (conn_status === 1) {
+			// Just (re)connected
+			get_system_info();
+			// Refresh settings on first connect OR after a long outage (device rebooted).
+			// Skip on brief flickers (<3 s) so a 1-second AbortController timeout doesn't
+			// clobber form fields the user is actively editing.
+			const long_outage = disconnect_time > 0 && (Date.now() - disconnect_time) > 3000;
+			if (!ever_connected || long_outage) {
+				get_settings();
+				setTimeout(change_msp_ltm_visibility, 500);
+				setTimeout(change_ap_ip_visibility, 500);
+				setTimeout(change_uart_visibility, 500);
+			}
+			ever_connected = true;
+			disconnect_time = 0;
+		} else {
+			// Just went offline — record when
+			disconnect_time = Date.now();
+		}
 	}
 	old_conn_status = conn_status
 }

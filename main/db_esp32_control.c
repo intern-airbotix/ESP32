@@ -79,6 +79,8 @@ int db_open_serial_udp_socket() {
     err = bind(udp_socket, (struct sockaddr *) &server_addr, sizeof(server_addr));
     if (err < 0) {
         ESP_LOGE(TAG, "Socket unable to bind to %i errno %d", APP_PORT_PROXY_UDP, errno);
+        close(udp_socket);
+        return -1;
     }
     fcntl(udp_socket, F_SETFL, O_NONBLOCK);
     ESP_LOGI(TAG, "Opened UDP socket on port %i", APP_PORT_PROXY_UDP);
@@ -360,7 +362,8 @@ void handle_tcp_master(const int tcp_master_socket, int tcp_clients[]) {
                 return;
             }
         }
-        ESP_LOGI(TAG, "TCP: Could not accept connection. Too many clients connected.");
+        ESP_LOGW(TAG, "TCP: Could not accept connection — all %d slots full, closing fd=%d", CONFIG_LWIP_MAX_ACTIVE_TCP, new_tcp_client);
+        close(new_tcp_client);  // must close or the FD leaks
     }
 }
 

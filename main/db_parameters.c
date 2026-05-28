@@ -764,21 +764,30 @@ void db_param_read_all_params_json(const cJSON *root_obj) {
                 break;
             case UINT8:
                 if (jobject) {
-                    db_param_is_valid_assign_u8(jobject->valueint, db_params[i]);
+                    if (!db_param_is_valid_assign_u8(jobject->valueint, db_params[i])) {
+                        ESP_LOGW(TAG, "JSON: rejected out-of-range value %d for param '%s'",
+                                 jobject->valueint, (char *) db_params[i]->db_name);
+                    }
                 } else {
                     // do nothing - param was not found in the json
                 }
                 break;
             case UINT16:
                 if (jobject) {
-                    db_param_is_valid_assign_u16(jobject->valueint, db_params[i]);
+                    if (!db_param_is_valid_assign_u16(jobject->valueint, db_params[i])) {
+                        ESP_LOGW(TAG, "JSON: rejected out-of-range value %d for param '%s'",
+                                 jobject->valueint, (char *) db_params[i]->db_name);
+                    }
                 } else {
                     // do nothing - param was not found in the json
                 }
                 break;
             case INT32:
                 if (jobject) {
-                    db_param_is_valid_assign_i32(jobject->valueint, db_params[i]);
+                    if (!db_param_is_valid_assign_i32(jobject->valueint, db_params[i])) {
+                        ESP_LOGW(TAG, "JSON: rejected out-of-range value %d for param '%s'",
+                                 jobject->valueint, (char *) db_params[i]->db_name);
+                    }
                 } else {
                     // do nothing - param was not found in the json
                 }
