@@ -84,6 +84,10 @@ uint8_t LOCAL_MAC_ADDRESS[6];
 // Wi-Fi client mode vars
 static int s_retry_num = 0;
 static EventGroupHandle_t s_wifi_event_group;
+// Runtime STA->AP fallback: reboot if STA link stays down >= WIFI_STA_CONNECT_TIMEOUT_MS after a prior connect.
+static volatile bool       s_sta_was_ever_connected = false; // gates runtime fallback to post-first-connect
+static volatile bool       s_sta_disconnected       = false; // STA link currently down (post-connect)
+static volatile TickType_t s_sta_disconnect_tick    = 0;     // tick latched on first drop
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
 #define WIFI_STA_CONNECT_TIMEOUT_MS 80000   //<- edit here for fallback time
@@ -195,6 +199,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
             ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
             s_retry_num++;
             ESP_LOGI(TAG, "Retry to connect to the AP (%i)", s_retry_num);
+            // Latch the time of the FIRST drop only (a disconnect-retry storm must not keep
+            // resetting the timer). Cleared on reconnect in IP_EVENT_STA_GOT_IP.
+            if (s_sta_was_ever_connected && !s_sta_disconnected) {
+                s_sta_disconnected    = true;
+                s_sta_disconnect_tick = xTaskGetTickCount();
+            }
         } else {
             ESP_LOGD(TAG, "WIFI_EVENT_STA_DISCONNECTED - did not try to re-connect since WiFi was commanded off");
         }
@@ -203,6 +213,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         ESP_LOGI(TAG, "IP_EVENT_STA_GOT_IP:" IPSTR, IP2STR(&event->ip_info.ip));
         sprintf(CURRENT_CLIENT_IP, IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
+        s_sta_was_ever_connected = true;
+        s_sta_disconnected       = false; // reconnected -> cancel any pending runtime AP fallback
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -519,6 +531,24 @@ static void db_start_ap_fallback(void) {
     db_ap_setup_and_start(&wifi_config, DB_WIFI_MODE_AP);
 
     ESP_LOGI(TAG, "Fallback AP started - SSID: \"%s\", IP: %s", DB_PARAM_WIFI_SSID, DB_PARAM_AP_IP);
+}
+
+/**
+ * Periodically called from the Wi-Fi control task while in STA mode.
+ * Reboots if the STA link has been down >= WIFI_STA_CONNECT_TIMEOUT_MS after a prior successful
+ * connection (and the radio was not commanded off). On reboot the normal boot flow retries STA
+ * and, if the network is still unreachable, falls back to AP via the tested boot path.
+ */
+void db_check_sta_link_timeout(void) {
+    if (DB_PARAM_RADIO_MODE != DB_WIFI_MODE_STA) return; // already left STA mode
+    if (DB_RADIO_IS_OFF) return;                         // autopilot armed -> radio off, do not reboot
+    if (!s_sta_was_ever_connected) return;               // never connected -> boot path owns this case
+    if (!s_sta_disconnected) return;                     // currently connected -> nothing to do
+    if ((xTaskGetTickCount() - s_sta_disconnect_tick) >= pdMS_TO_TICKS(WIFI_STA_CONNECT_TIMEOUT_MS)) {
+        ESP_LOGW(TAG, "STA link down >= %d ms after prior connect - rebooting to retry STA / fall back to AP.",
+                 WIFI_STA_CONNECT_TIMEOUT_MS);
+        esp_restart();
+    }
 }
 
 /**
