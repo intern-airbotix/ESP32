@@ -215,6 +215,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         s_retry_num = 0;
         s_sta_was_ever_connected = true;
         s_sta_disconnected       = false; // reconnected -> cancel any pending runtime AP fallback
+        // Remember the subnet-directed broadcast address of the joined network (ip | ~netmask). Used for
+        // mavesp8266-style GCS discovery broadcasts in STA mode while no UDP client is known.
+        db_sta_subnet_broadcast_ip = event->ip_info.ip.addr | ~event->ip_info.netmask.addr;
+        // Tell the control task to recreate the UDP socket and re-register the configured UDP host so the
+        // MAVLink stream to the GCS resumes right after every (re)connect.
+        db_udp_reinit_pending = true;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -614,8 +620,8 @@ void db_set_radio_status(uint8_t enable_wifi) {
 void db_write_settings_to_nvs() {
     // print parameters to console for logging
     ESP_LOGI(TAG, "Trying to save parameters:");
-    uint8_t param_str_buffer[512] = {0};
-    db_param_print_values_to_buffer(param_str_buffer);
+    uint8_t param_str_buffer[768] = {0};
+    db_param_print_values_to_buffer(param_str_buffer, sizeof(param_str_buffer));
     ESP_LOGI(TAG, "%s", param_str_buffer);
     ESP_LOGI(TAG, "Saving to NVS %s", NVS_NAMESPACE);
     nvs_handle_t my_handle;
@@ -649,6 +655,14 @@ void save_udp_client_to_nvm(struct db_udp_client_t *new_db_udp_client, bool clea
         ESP_LOGI(TAG, "Clearing UDP client from NVM");
     }
 
+    // Keep the in-RAM parameters in sync with what we write to NVS. Otherwise a later settings-save
+    // (db_write_settings_to_nvs writes ALL params) would overwrite the NVS keys with stale values and
+    // silently erase the saved UDP client.
+    strncpy((char *) db_param_udp_client_ip.value.db_param_str.value, ip,
+            db_param_udp_client_ip.value.db_param_str.max_len - 1);
+    db_param_udp_client_ip.value.db_param_str.value[db_param_udp_client_ip.value.db_param_str.max_len - 1] = '\0';
+    db_param_udp_client_port.value.db_param_u16.value = port;
+
     nvs_handle my_handle;
     ESP_ERROR_CHECK(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &my_handle));
     ESP_ERROR_CHECK(nvs_set_str(my_handle, (char *) db_param_udp_client_ip.db_name, ip));
@@ -676,8 +690,8 @@ void db_read_settings_nvs() {
         db_write_settings_to_nvs();
 
         // Print parameters to console for logging
-        uint8_t param_str_buffer[512] = {0};
-        db_param_print_values_to_buffer(param_str_buffer);
+        uint8_t param_str_buffer[768] = {0};
+        db_param_print_values_to_buffer(param_str_buffer, sizeof(param_str_buffer));
         ESP_LOGI(TAG, "Initialized with default values:\n%s", (char *)param_str_buffer);
     } else {
         ESP_LOGI(TAG, "Reading settings from NVS");
@@ -685,32 +699,12 @@ void db_read_settings_nvs() {
         nvs_close(my_handle);
 
         // print parameters to console for logging
-        uint8_t param_str_buffer[512] = {0};
-        db_param_print_values_to_buffer(param_str_buffer);
+        uint8_t param_str_buffer[768] = {0};
+        db_param_print_values_to_buffer(param_str_buffer, sizeof(param_str_buffer));
         ESP_LOGI(TAG, "%s", (char *) param_str_buffer);
 
-        // Check if we have a saved UDP client from the last session. Add it to the known udp clients if there is one.
-        if (strlen((char *) db_param_udp_client_ip.value.db_param_str.value) > 0 &&
-            db_param_udp_client_port.value.db_param_u16.value != 0) {
-            // there was a saved UDP client in the NVM from last session - add it to the udp clients list
-            ESP_LOGI(TAG, "Adding %s:%i to known UDP clients.",
-                     (char *) db_param_udp_client_ip.value.db_param_str.value,
-                     db_param_udp_client_port.value.db_param_u16.value);
-            struct sockaddr_in new_sockaddr;
-            memset(&new_sockaddr, 0, sizeof(new_sockaddr));
-            new_sockaddr.sin_family = AF_INET;
-            inet_pton(AF_INET, (char *) db_param_udp_client_ip.value.db_param_str.value, &new_sockaddr.sin_addr);
-            new_sockaddr.sin_port = htons(db_param_udp_client_port.value.db_param_u16.value);
-            struct db_udp_client_t new_udp_client = {
-                    .udp_client = new_sockaddr,
-                    .mac = {0, 0, 0, 0, 0, 0}   // dummy MAC
-            };
-            bool save_to_nvm = false;   // no need to save it to NVM again
-            add_to_known_udp_clients(udp_conn_list, new_udp_client, save_to_nvm);
-        } else {
-            // no saved UDP client - do nothing
-            ESP_LOGI(TAG, "No saved UDP client - skipping");
-        }
+        // Check if we have a saved UDP client from the last session. Add it (pinned) to the known udp clients.
+        db_register_saved_udp_host();
     }
 }
 
@@ -769,8 +763,8 @@ void set_reset_trigger() {
  * Write settings to JTAG/USB, so we can debug issues better
  */
 void db_jtag_serial_info_print() {
-    uint8_t buffer[512];
-    const int len = db_param_print_values_to_buffer(buffer);
+    uint8_t buffer[768];
+    const int len = db_param_print_values_to_buffer(buffer, sizeof(buffer));
     write_to_serial(buffer, len);
 }
 

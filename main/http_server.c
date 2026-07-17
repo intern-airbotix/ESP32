@@ -244,7 +244,9 @@ static esp_err_t settings_clients_udp_post(httpd_req_t *req) {
     new_sockaddr.sin_port = htons(new_udp_port);
     struct db_udp_client_t new_udp_client = {
             .udp_client = new_sockaddr,
-            .mac = {0, 0, 0, 0, 0, 0}   // dummy MAC
+            .mac = {0, 0, 0, 0, 0, 0},   // dummy MAC
+            .pinned = true,              // manually added clients are user-configured - never auto-remove or expire
+                                         // them ("save" only controls whether the client additionally goes to NVM)
     };
     // udp_conn_list is initialized as the very first thing during startup - we expect it to be there
     bool success = add_to_known_udp_clients(udp_conn_list, new_udp_client, save_to_nvm);
@@ -282,6 +284,10 @@ static esp_err_t settings_clients_clear_udp_get(httpd_req_t *req) {
     ESP_LOGI(TAG, "Removed all UDP clients from list!");
     // Clear saved client as well. Pass any client since it will be ignored as long as clear_client is set to true.
     save_udp_client_to_nvm(&udp_conn_list->db_udp_clients[0], true);
+    httpd_resp_sendstr(req, "{\n"
+                            "    \"status\": \"success\",\n"
+                            "    \"msg\": \"Cleared UDP clients!\"\n"
+                            "  }");
     return ESP_OK;
 }
 

@@ -51,16 +51,19 @@ uint16_t app_port_proxy = APP_PORT_PROXY;
 udp_conn_list_t *udp_conn_list;
 int connected_tcp_clients[CONFIG_LWIP_MAX_ACTIVE_TCP];
 int8_t num_connected_tcp_clients = 0;
+volatile bool db_udp_reinit_pending = false;
+volatile uint32_t db_sta_subnet_broadcast_ip = 0; // network byte order; 0 = unknown/not connected. Set on IP_EVENT_STA_GOT_IP.
 
 /**
  * Opens non-blocking UDP socket used for WiFi to UART communication. Does also accept broadcast packets just in case.
+ * Binds to the user configured local UDP listen port (db_param_udp_listen_port, default 14550).
  * @return returns socket file descriptor
  */
 int db_open_serial_udp_socket() {
     struct sockaddr_in server_addr;
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(APP_PORT_PROXY_UDP);
+    server_addr.sin_port = htons(DB_PARAM_UDP_LISTEN_PORT);
     int addr_family = AF_INET;
     int ip_protocol = IPPROTO_IP;
     char addr_str[128];
@@ -78,13 +81,78 @@ int db_open_serial_udp_socket() {
     }
     err = bind(udp_socket, (struct sockaddr *) &server_addr, sizeof(server_addr));
     if (err < 0) {
-        ESP_LOGE(TAG, "Socket unable to bind to %i errno %d", APP_PORT_PROXY_UDP, errno);
+        ESP_LOGE(TAG, "Socket unable to bind to %i errno %d", DB_PARAM_UDP_LISTEN_PORT, errno);
         close(udp_socket);
         return -1;
     }
+    // Request the destination address of received datagrams (IP_PKTINFO via recvmsg). Needed to ignore broadcast
+    // packets from other drones on the same network in STA mode (see control_module_udp_tcp).
+    int pktinfo_on = 1;
+    if (setsockopt(udp_socket, IPPROTO_IP, IP_PKTINFO, &pktinfo_on, sizeof(pktinfo_on)) < 0) {
+        ESP_LOGW(TAG, "Could not enable IP_PKTINFO on UDP socket, errno %d - broadcast filtering unavailable", errno);
+    }
     fcntl(udp_socket, F_SETFL, O_NONBLOCK);
-    ESP_LOGI(TAG, "Opened UDP socket on port %i", APP_PORT_PROXY_UDP);
+    ESP_LOGI(TAG, "Opened UDP socket on port %i", DB_PARAM_UDP_LISTEN_PORT);
     return udp_socket;
+}
+
+/**
+ * (Re-)registers the UDP host configured via the udp_client_ip/udp_client_port parameters (saved in NVM)
+ * in the list of known UDP clients. The entry is marked as pinned so it is never auto-removed on send failures.
+ * Safe to call multiple times - duplicates are not added but upgraded to pinned.
+ * Called during boot after reading the settings and again after every Wi-Fi reconnect in STA mode, so the
+ * configured GCS (e.g. Mission Planner listening on UDP) always receives MAVLink without having to send first.
+ */
+void db_register_saved_udp_host(void) {
+    if (strlen((char *) db_param_udp_client_ip.value.db_param_str.value) > 0 &&
+        db_param_udp_client_port.value.db_param_u16.value != 0) {
+        ESP_LOGI(TAG, "Registering configured UDP host %s:%i as pinned UDP client.",
+                 (char *) db_param_udp_client_ip.value.db_param_str.value,
+                 db_param_udp_client_port.value.db_param_u16.value);
+        struct sockaddr_in new_sockaddr;
+        memset(&new_sockaddr, 0, sizeof(new_sockaddr));
+        new_sockaddr.sin_family = AF_INET;
+        if (inet_pton(AF_INET, (char *) db_param_udp_client_ip.value.db_param_str.value, &new_sockaddr.sin_addr) != 1) {
+            ESP_LOGW(TAG, "Configured UDP host IP '%s' is not a valid IPv4 address - not registering",
+                     (char *) db_param_udp_client_ip.value.db_param_str.value);
+            return;
+        }
+        new_sockaddr.sin_port = htons(db_param_udp_client_port.value.db_param_u16.value);
+        struct db_udp_client_t new_udp_client = {
+                .udp_client = new_sockaddr,
+                .mac = {0, 0, 0, 0, 0, 0},   // dummy MAC
+                .pinned = true,
+        };
+        add_to_known_udp_clients(udp_conn_list, new_udp_client, false); // already in NVM - do not save again
+    } else {
+        // no UDP host configured - nothing to register
+    }
+}
+
+/**
+ * Removes auto-learned (unpinned) UDP clients that have not sent us anything for DB_UDP_CLIENT_IDLE_TIMEOUT_MS.
+ * Called periodically from the control task in STA mode. Every GCS keeps sending heartbeats while connected, so a
+ * silent client is one that closed its session (e.g. a Mission Planner UDPCI connection on an ephemeral port).
+ * Without this, such a stale client would keep receiving the (unicast) telemetry stream forever and the discovery
+ * broadcast on port 14550 would never resume. Pinned (user-configured) clients are never expired.
+ */
+void db_remove_expired_udp_clients(void) {
+    if (udp_conn_list == NULL) return;
+    uint32_t now = (uint32_t) xTaskGetTickCount();
+    for (int i = 0; i < udp_conn_list->size; i++) {
+        if (udp_conn_list->db_udp_clients[i].pinned) continue;
+        if ((now - udp_conn_list->db_udp_clients[i].last_recv_tick) >= pdMS_TO_TICKS(DB_UDP_CLIENT_IDLE_TIMEOUT_MS)) {
+            char *client_ip = inet_ntoa(((struct sockaddr_in *) &udp_conn_list->db_udp_clients[i].udp_client)->sin_addr);
+            ESP_LOGI(TAG, "UDP - Removing client %s:%i - idle for >%i ms",
+                     client_ip, ntohs(udp_conn_list->db_udp_clients[i].udp_client.sin_port),
+                     DB_UDP_CLIENT_IDLE_TIMEOUT_MS);
+            for (int j = i; j < udp_conn_list->size - 1; j++) {
+                udp_conn_list->db_udp_clients[j] = udp_conn_list->db_udp_clients[j + 1];
+            }
+            udp_conn_list->size--;
+            i--;
+        }
+    }
 }
 
 /**
@@ -162,9 +230,11 @@ int db_open_int_telemetry_udp_socket() {
 /**
  * Sends data to all clients that are part of the udp connection list. No resending of packets in case of failure.
  * Special behavior in DroneShow Edition:
- *  - If there is no UDP client detected or manually set, we send packets to broadcast address and pre-defined port so
- *    that the GCS can detect the ESP32.
- *  - This is a feature that can be enabled/disabled by the user together with the target port
+ *  - If there is no UDP client known (none learned, none configured via udp_client_ip), packets are broadcast on
+ *    port 14550 so a GCS can auto-detect the drone without per-drone configuration (mavesp8266-style discovery):
+ *    AP mode uses the limited broadcast address, STA mode uses the subnet-directed broadcast of the joined network.
+ *  - The first GCS that replies is registered as a UDP client and the stream switches to unicast. If all clients
+ *    are lost again (e.g. GCS gone), discovery broadcasting resumes automatically.
  *
  * @param data Buffer with the data to send
  * @param data_length Length of the data in the buffer
@@ -173,20 +243,36 @@ void db_send_to_all_udp_clients(const uint8_t *data, uint data_length) {
     if (udp_conn_list == NULL || udp_conn_list->udp_socket < 0) {
         return;
     }
-    if (udp_conn_list->size == 0 &&
-        (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP || DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP_LR)) {
-        // No registered UDP clients yet — broadcast so GCS (e.g. Mission Planner) can auto-detect the MAVLink stream
-        // without needing to send a packet first. Only in AP mode to avoid broadcast storms on upstream routers in STA mode.
+    static bool discovery_broadcast_announced = false;
+    if (udp_conn_list->size == 0) {
+        // No registered UDP clients yet — broadcast so a GCS (e.g. Mission Planner, Skybrush) can auto-detect the
+        // MAVLink stream without needing to send a packet first. As soon as any GCS replies it gets registered as a
+        // UDP client (size > 0) and we switch to pure unicast - same discovery scheme as ArduPilot's mavesp8266.
         // (SO_BROADCAST is already enabled on this socket at creation in db_open_serial_udp_socket)
         struct sockaddr_in broadcast_addr = {
             .sin_family = AF_INET,
             .sin_port = htons(APP_PORT_PROXY_UDP),
             .sin_addr.s_addr = htonl(INADDR_BROADCAST),
         };
+        if (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP || DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP_LR) {
+            // AP mode: we own the network - limited broadcast is fine
+        } else if (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_STA && db_sta_subnet_broadcast_ip != 0) {
+            // STA mode: use the subnet-directed broadcast of the network we joined (e.g. 192.168.2.255) so packets
+            // stay inside the drone/GCS network and are never routed upstream.
+            broadcast_addr.sin_addr.s_addr = db_sta_subnet_broadcast_ip;
+        } else {
+            return; // no valid broadcast target (e.g. STA not connected yet)
+        }
+        if (!discovery_broadcast_announced) {
+            ESP_LOGI(TAG, "No UDP client known - broadcasting telemetry to %s:%i until a GCS replies",
+                     inet_ntoa(broadcast_addr.sin_addr), APP_PORT_PROXY_UDP);
+            discovery_broadcast_announced = true;
+        }
         sendto(udp_conn_list->udp_socket, data, data_length, 0,
                (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr));
         return;
     }
+    discovery_broadcast_announced = false; // clients known - re-announce if we ever fall back to discovery
     for (int i = 0; i < udp_conn_list->size; i++) {  // send to all UDP clients
         int sent = sendto(udp_conn_list->udp_socket, data, data_length, 0,
                           (struct sockaddr *) &udp_conn_list->db_udp_clients[i].udp_client,
@@ -196,13 +282,21 @@ void db_send_to_all_udp_clients(const uint8_t *data, uint data_length) {
             char *client_ip = inet_ntoa(((struct sockaddr_in *)&udp_conn_list->db_udp_clients[i].udp_client)->sin_addr);
             udp_conn_list->db_udp_clients[i].send_fail_count++;
             if (udp_conn_list->db_udp_clients[i].send_fail_count >= 5) {
-                ESP_LOGW(TAG, "UDP - Removing unreachable client %s after repeated send failures (last errno: %d)",
-                         client_ip, err);
-                for (int j = i; j < udp_conn_list->size - 1; j++) {
-                    udp_conn_list->db_udp_clients[j] = udp_conn_list->db_udp_clients[j + 1];
+                if (udp_conn_list->db_udp_clients[i].pinned) {
+                    // User-configured UDP host (saved in NVM) must survive Wi-Fi drops/reconnects.
+                    // Never remove it - just keep trying. Log throttled via the fail counter wrap.
+                    ESP_LOGW(TAG, "UDP - Configured host %s unreachable (errno: %d) - keeping it, will retry",
+                             client_ip, err);
+                    udp_conn_list->db_udp_clients[i].send_fail_count = 0;
+                } else {
+                    ESP_LOGW(TAG, "UDP - Removing unreachable client %s after repeated send failures (last errno: %d)",
+                             client_ip, err);
+                    for (int j = i; j < udp_conn_list->size - 1; j++) {
+                        udp_conn_list->db_udp_clients[j] = udp_conn_list->db_udp_clients[j + 1];
+                    }
+                    udp_conn_list->size--;
+                    i--;
                 }
-                udp_conn_list->size--;
-                i--;
             } else {
                 ESP_LOGE(TAG, "UDP - Error sending (%i/%i) to %s because of %s", sent, data_length, client_ip, strerror(err));
             }
@@ -404,23 +498,36 @@ void udp_client_list_destroy(udp_conn_list_t *n_udp_conn_list) {
  *                          device cannot be automatically removed later on. To remove it, the user must clear the entire list.
  * @param save_to_nvm Set to 1 (true) in case you want the UDP client to survive the reboot. Set to 0 (false) if client is temporary for this session.
  *                    It will then be saved to NVM and added to the udp_conn_list_t on startup. Only one client can be saved to NVM.
- * @return 1 if added - 0 if not
+ * @return true if the client is in the list after the call (newly added or already known) - false on error (list NULL or full)
  */
 bool
 add_to_known_udp_clients(udp_conn_list_t *n_udp_conn_list, struct db_udp_client_t new_db_udp_client, bool save_to_nvm) {
     if (n_udp_conn_list == NULL) { // Check if the list is NULL
         return false; // Do nothing
     }
-    if (n_udp_conn_list->size == MAX_UDP_CLIENTS) { // Check if the list is full
-        return false; // Do nothing
-    }
     for (int i = 0; i < n_udp_conn_list->size; i++) {
         if ((n_udp_conn_list->db_udp_clients[i].udp_client.sin_port == new_db_udp_client.udp_client.sin_port) &&
             (n_udp_conn_list->db_udp_clients[i].udp_client.sin_addr.s_addr ==
              new_db_udp_client.udp_client.sin_addr.s_addr)) {
-            return false; // client existing - do not add
+            // client existing - do not add again, but upgrade to pinned if requested & give it a fresh start
+            if (new_db_udp_client.pinned) {
+                n_udp_conn_list->db_udp_clients[i].pinned = true;
+                n_udp_conn_list->db_udp_clients[i].send_fail_count = 0;
+            }
+            // we hear from this client right now - refresh its idle-expiry timestamp
+            n_udp_conn_list->db_udp_clients[i].last_recv_tick = (uint32_t) xTaskGetTickCount();
+            // The user may save a client to NVM that was already learned dynamically (e.g. it sent us a packet
+            // first). The NVM write must not be skipped in that case or the client would be lost after reboot.
+            if (save_to_nvm) {
+                save_udp_client_to_nvm(&new_db_udp_client, false);
+            }
+            return true; // client is in the list - report success
         }
     }
+    if (n_udp_conn_list->size == MAX_UDP_CLIENTS) { // Check if the list is full
+        return false; // Do nothing
+    }
+    new_db_udp_client.last_recv_tick = (uint32_t) xTaskGetTickCount(); // start the idle-expiry clock
     n_udp_conn_list->db_udp_clients[n_udp_conn_list->size] = new_db_udp_client; // Copy the element data to the end of the array
     n_udp_conn_list->size++; // Increment the size of the list
     // some logging
@@ -695,6 +802,18 @@ _Noreturn void control_module_udp_tcp() {
 
     ESP_LOGI(TAG, "Started control module (Wi-Fi)");
     while (1) {
+        // Wi-Fi (re)connected (IP_EVENT_STA_GOT_IP) -> recreate the UDP socket and re-register the configured
+        // UDP host so the telemetry stream resumes automatically after a Wi-Fi drop in STA mode.
+        if (db_udp_reinit_pending) {
+            db_udp_reinit_pending = false;
+            if (udp_conn_list->udp_socket >= 0) {
+                close(udp_conn_list->udp_socket);
+                udp_conn_list->udp_socket = -1;
+            }
+            udp_conn_list->udp_socket = db_open_serial_udp_socket();
+            db_register_saved_udp_host();
+            ESP_LOGI(TAG, "Wi-Fi (re)connect: UDP socket reinitialized & configured UDP host re-registered");
+        }
         // Read incoming wireless data (Wi-Fi)
         // Wi-Fi based modes that use TCP and UDP communication
         bool data_processed = false;
@@ -731,9 +850,35 @@ _Noreturn void control_module_udp_tcp() {
                 }
             }
         }
-        // handle incoming UDP data on main port 14550 - Read UDP and forward to UART
-        ssize_t recv_length = recvfrom(udp_conn_list->udp_socket, udp_buffer, UDP_BUF_SIZE, 0,
-                                       (struct sockaddr *) &new_db_udp_client.udp_client, &udp_socklen);
+        // handle incoming UDP data on main port 14550 - Read UDP and forward to UART.
+        // recvmsg with IP_PKTINFO instead of recvfrom: we need the DESTINATION address of each datagram to filter
+        // out broadcasts in STA mode. Many drones share one network in a drone show - every drone's discovery
+        // broadcast is relayed to all other drones by the AP. Those must never be forwarded to the FC or register
+        // the other drone as a UDP client. A real GCS always answers with unicast, which passes this filter.
+        struct iovec udp_iov = {.iov_base = udp_buffer, .iov_len = UDP_BUF_SIZE};
+        uint8_t udp_cmsg_buf[CMSG_SPACE(sizeof(struct in_pktinfo))];
+        struct msghdr udp_msg = {
+                .msg_name = &new_db_udp_client.udp_client,
+                .msg_namelen = sizeof(new_db_udp_client.udp_client),
+                .msg_iov = &udp_iov,
+                .msg_iovlen = 1,
+                .msg_control = udp_cmsg_buf,
+                .msg_controllen = sizeof(udp_cmsg_buf),
+        };
+        ssize_t recv_length = recvmsg(udp_conn_list->udp_socket, &udp_msg, 0);
+        if (recv_length > 0 && DB_PARAM_RADIO_MODE == DB_WIFI_MODE_STA) {
+            for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(&udp_msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&udp_msg, cmsg)) {
+                if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_PKTINFO) {
+                    uint32_t dest_ip = ((struct in_pktinfo *) CMSG_DATA(cmsg))->ipi_addr.s_addr;
+                    if (dest_ip == htonl(INADDR_BROADCAST) ||
+                        (db_sta_subnet_broadcast_ip != 0 && dest_ip == db_sta_subnet_broadcast_ip)) {
+                        data_processed = true; // we did read something - keep the loop responsive
+                        recv_length = 0;       // broadcast from another drone - ignore it entirely
+                    }
+                    break;
+                }
+            }
+        }
         if (recv_length > 0) {
             data_processed = true;
             if (DB_PARAM_SERIAL_PROTO == DB_SERIAL_PROTOCOL_MAVLINK) {
@@ -778,6 +923,7 @@ _Noreturn void control_module_udp_tcp() {
                     db_esp_signal_quality.air_rssi = -127;
                 } else {/* all good */}
                 db_check_sta_link_timeout();   // runtime STA->AP fallback after sustained disconnect
+                db_remove_expired_udp_clients(); // drop auto-learned clients that went silent (stale UDPCI sessions)
             } else if (!DB_RADIO_IS_OFF &&
                        (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP || DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP_LR)) {
                 ESP_ERROR_CHECK_WITHOUT_ABORT(

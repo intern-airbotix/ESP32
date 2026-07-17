@@ -182,6 +182,22 @@
                             <input type="text" name="wifi_hostname" value="" maxlength="31" id="wifi_hostname" placeholder="DroneBridgeESP32">
                         </div>
                     </div>
+                    <div class="row">
+                        <div class="six columns" id="udp_client_ip_div">
+                            <label for="udp_client_ip">UDP Host IP - telemetry is sent to this GCS address</label>
+                            <input type="text" name="udp_client_ip" value="" id="udp_client_ip" maxlength="15" placeholder="optional - e.g. IP of GCS PC">
+                        </div>
+                        <div class="six columns" id="udp_client_port_div">
+                            <label for="udp_client_port">UDP Host Port</label>
+                            <input type="number" name="udp_client_port" value="14550" id="udp_client_port" min="0" max="65535">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="six columns" id="udp_listen_port_div">
+                            <label for="udp_listen_port">UDP Listen Port (local port of the ESP32)</label>
+                            <input type="number" name="udp_listen_port" value="14550" id="udp_listen_port" min="1" max="65535">
+                        </div>
+                    </div>
                 </details>
             </div>
             <h3 style="margin-top: 2rem">Serial</h3>

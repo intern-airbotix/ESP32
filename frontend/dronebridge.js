@@ -123,8 +123,10 @@ function toJSONString(form) {
 		let element = elements[i]
 		let name = element.name;
 		let value = element.value;
-		// parse numbers as numbers except for SSID and password fields
-		if (!isNaN(Number(value)) && name !== "ssid" && name !== "wifi_pass" && name !== "sta_ssid" && name !== "sta_pass") {
+		// parse numbers as numbers except for SSID, password and IP string fields.
+		// udp_client_ip must always be sent as a string: an empty field would otherwise become
+		// Number("") = 0 -> parseInt -> NaN -> null in JSON and the firmware would silently keep the old IP.
+		if (!isNaN(Number(value)) && name !== "ssid" && name !== "wifi_pass" && name !== "sta_ssid" && name !== "sta_pass" && name !== "udp_client_ip") {
 			if (name) {
 				obj[name] = parseInt(value)
 			}

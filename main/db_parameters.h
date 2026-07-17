@@ -34,8 +34,8 @@
 #define DB_MATURITY_VERSION "stable"
 #define DB_TYPE_VERSION 255 // FIRMWARE_VERSION_TYPE_OFFICIAL -> https://mavlink.io/en/messages/common.html#FIRMWARE_VERSION_TYPE
 
-#define DB_PARAM_TOTAL_NUM          27  // total number of db parameters
-#define DB_PARAM_MAV_CNT            17  // Number of MAVLink parameters returned by ESP32 in the PARAM message. Needed by GCS.
+#define DB_PARAM_TOTAL_NUM          28  // total number of db parameters
+#define DB_PARAM_MAV_CNT            18  // Number of MAVLink parameters returned by ESP32 in the PARAM message. Needed by GCS.
 
 #define DB_PARAM_NAME_MAXLEN        16      // max len of a parameter/key stored in the ESP32 NVM
 #define DB_PARAM_MAX_MAV_PARAM_NAME_LEN 16  // max len of the field used to store the mav param name (max len 16 by def.)
@@ -93,6 +93,7 @@
 #define DB_PARAM_GPIO_CTS db_param_gpio_cts.value.db_param_u8.value
 #define DB_PARAM_SERIAL_RTS_THRESH db_param_gpio_rts_thresh.value.db_param_u8.value
 #define DB_PARAM_EN_EXT_ANT db_param_radio_ant_ext.value.db_param_u8.value
+#define DB_PARAM_UDP_LISTEN_PORT db_param_udp_listen_port.value.db_param_u16.value // local UDP port the ESP32 binds & listens on
 
 enum E_DB_WIFI_MODE {
   DB_WIFI_MODE_AP         = 1, // Wi-Fi access point mode with 802.11b mode enabled
@@ -190,12 +191,13 @@ extern db_parameter_t db_param_serial_read_timeout;
 extern db_parameter_t db_param_ltm_per_packet;
 extern db_parameter_t db_param_dis_radio_armed;
 extern db_parameter_t db_param_udp_client_port;
+extern db_parameter_t db_param_udp_listen_port;
 extern db_parameter_t db_param_rssi_dbm;
 
 void db_param_init_parameters();
 void db_param_set_to_default(db_parameter_t *db_parameter);
 void db_param_reset_all();
-int db_param_print_values_to_buffer(uint8_t *str_buffer);
+int db_param_print_values_to_buffer(uint8_t *str_buffer, size_t buffer_size);
 void db_param_read_all_params_nvs(const nvs_handle_t *nvs_handle);
 void db_param_write_all_params_nvs(const nvs_handle_t *nvs_handle);
 void db_param_read_all_params_json(const cJSON *root_obj);

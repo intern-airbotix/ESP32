@@ -23,6 +23,7 @@
 #include <esp_wifi_types_generic.h>
 #include <string.h>
 #include <lwip/sockets.h>
+#include "db_protocol.h"
 
 #define TAG "DB_PARAM"
 
@@ -393,6 +394,28 @@ db_parameter_t db_param_udp_client_port = {
 };
 
 /**
+ * Local UDP port the ESP32 binds to and listens on for incoming MAVLink/serial data (default 14550).
+ * Outgoing packets to registered UDP clients are sent from this port as well.
+ */
+db_parameter_t db_param_udp_listen_port = {
+        .db_name = "udp_listen_port",
+        .type = UINT16,
+        .mav_t = {
+                .param_name = "WIFI_UDP_LPORT",
+                .param_index = 17,
+                .param_type = MAV_PARAM_TYPE_UINT16,
+        },
+        .value = {
+                .db_param_u16 = {
+                        .value = APP_PORT_PROXY_UDP,
+                        .default_value = APP_PORT_PROXY_UDP,
+                        .min = 1,
+                        .max = UINT16_MAX,
+                }
+        }
+};
+
+/**
  *  Format/Unit of the reported RSSI as part of MAVLink RADIO STATUS message.
  *  If set to true (1) the RSSI will be reported as dBm (QGC)
  *  If set to false (0) the RSSI will be calculated as a value from 0 to 100 (MissionPlanner)
@@ -525,6 +548,7 @@ void db_param_init_parameters() {
             &db_param_ltm_per_packet,
             &db_param_dis_radio_armed,
             &db_param_udp_client_port,
+            &db_param_udp_listen_port,
             &db_param_rssi_dbm
     };
     memcpy(db_params, db_params_l, sizeof(db_params_l));
@@ -568,37 +592,54 @@ void db_param_reset_all() {
 
 /**
  * Helper function to convert all parameters with their values to a string buffer for logging etc.
- * @param str_buffer Buffer to write the parameter string - must be long enough ~512 bytes
+ * Output that does not fit into the supplied buffer is truncated (never overflows the buffer).
+ * @param str_buffer Buffer to write the parameter string to
+ * @param buffer_size Size of str_buffer in bytes (including space for the NUL terminator)
+ * @return Number of bytes written to str_buffer (excluding the NUL terminator)
  */
-int db_param_print_values_to_buffer(uint8_t *str_buffer) {
-    int str_len = 1; // overall length of the string in the str_buffer
+int db_param_print_values_to_buffer(uint8_t *str_buffer, const size_t buffer_size) {
+    if (str_buffer == NULL || buffer_size < 2) return 0;
+    int str_len = 1; // overall length of the string in the str_buffer (excluding NUL)
     str_buffer[0] = '\n';
     str_buffer[1] = '\0';
     for (int i = 0; i < sizeof(db_params) / sizeof(db_params[0]); i++) {
         uint8_t param_str_buf[128]; // buffer for the string of a single value
+        int line_len = 0;
         switch (db_params[i]->type) {
             case STRING:
-                str_len += sprintf((char *) param_str_buf, "\t%s: %s\n", (char *) db_params[i]->db_name,
-                                   (char *) db_params[i]->value.db_param_str.value);
+                line_len = snprintf((char *) param_str_buf, sizeof(param_str_buf), "\t%s: %s\n",
+                                    (char *) db_params[i]->db_name,
+                                    (char *) db_params[i]->value.db_param_str.value);
                 break;
             case UINT8:
-                str_len += sprintf((char *) param_str_buf, "\t%s: %i\n", (char *) db_params[i]->db_name,
-                                   db_params[i]->value.db_param_u8.value);
+                line_len = snprintf((char *) param_str_buf, sizeof(param_str_buf), "\t%s: %i\n",
+                                    (char *) db_params[i]->db_name,
+                                    db_params[i]->value.db_param_u8.value);
                 break;
             case UINT16:
-                str_len += sprintf((char *) param_str_buf, "\t%s: %i\n", (char *) db_params[i]->db_name,
-                                   db_params[i]->value.db_param_u16.value);
+                line_len = snprintf((char *) param_str_buf, sizeof(param_str_buf), "\t%s: %i\n",
+                                    (char *) db_params[i]->db_name,
+                                    db_params[i]->value.db_param_u16.value);
                 break;
             case INT32:
-                str_len += sprintf((char *) param_str_buf, "\t%s: %li\n", (char *) db_params[i]->db_name,
-                                   db_params[i]->value.db_param_i32.value);
+                line_len = snprintf((char *) param_str_buf, sizeof(param_str_buf), "\t%s: %li\n",
+                                    (char *) db_params[i]->db_name,
+                                    db_params[i]->value.db_param_i32.value);
                 break;
             default:
                 ESP_LOGE(TAG, "db_param_print_values_to_buffer() -> db_parameter.type unknown!");
                 break;
         }
-        strcat((char *) str_buffer,
-               (char *) param_str_buf); // add the string of the individual printed param to the big buffer
+        if (line_len <= 0) continue;
+        if (line_len > (int) sizeof(param_str_buf) - 1) line_len = (int) sizeof(param_str_buf) - 1; // snprintf truncated
+        if (str_len + line_len > (int) buffer_size - 1) {
+            ESP_LOGW(TAG, "db_param_print_values_to_buffer() -> buffer too small (%u bytes) - output truncated!",
+                     (unsigned int) buffer_size);
+            break;
+        }
+        memcpy(&str_buffer[str_len], param_str_buf, line_len); // add the individual param line to the big buffer
+        str_len += line_len;
+        str_buffer[str_len] = '\0';
     }
     return str_len;
 }

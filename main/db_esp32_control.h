@@ -21,6 +21,7 @@
 #define DB_ESP32_DB_ESP32_CONTROL_H
 
 #include <lwip/sockets.h>
+#include <stdbool.h>
 
 #define MULTICAST_IPV4_ADDR "232.10.11.12"  // used for internal telemetry messages between ESP32s
 #define MULTICAST_TTL 1
@@ -28,12 +29,19 @@
 #define TRANS_RD_BYTES_NUM  8   // amount of bytes read form serial port at once when transparent/MSP/LTM is selected
 #define UDP_BUF_SIZE    2048
 #define UART_BUF_SIZE   (1024)
+// Auto-learned UDP clients are dropped in STA mode when they stop sending for this long. GCS software (Mission
+// Planner, QGC, Skybrush) sends heartbeats at >= 1 Hz, so an idle client is a gone client (e.g. closed UDPCI
+// session). Dropping it makes the drone fall back to discovery broadcast on port 14550 instead of unicasting
+// to a stale address/port forever.
+#define DB_UDP_CLIENT_IDLE_TIMEOUT_MS 30000
 
 // per client structure of connected devices in softAP mode
 struct db_udp_client_t {
     uint8_t mac[6];     // MAC address of connected client
     struct sockaddr_in udp_client;    // socket address (IP & PORT) of connected client
     uint8_t send_fail_count; // consecutive send failures; client removed when exceeds threshold
+    uint8_t pinned;     // user-configured UDP host - never auto-removed (no send-failure or idle removal)
+    uint32_t last_recv_tick;  // FreeRTOS tick of the last packet received from this client (idle expiry, STA mode)
 };
 
 typedef struct udp_conn_list_s {
@@ -51,7 +59,14 @@ typedef struct {
     uint16_t gnd_rx_packets_lost;   // Number of ESP-NOW packets the GND station lost coming from this AIR peer (based on seq. number)
 } db_esp_signal_quality_t;
 
+// Set to true (e.g. from the Wi-Fi event handler on IP_EVENT_STA_GOT_IP) to make the control task
+// recreate the UDP socket and re-register the NVM-saved UDP host after a Wi-Fi (re)connection.
+extern volatile bool db_udp_reinit_pending;
+extern volatile uint32_t db_sta_subnet_broadcast_ip;
+
 void db_start_control_module();
+void db_register_saved_udp_host(void);
+void db_remove_expired_udp_clients(void);
 udp_conn_list_t *udp_client_list_create();
 void udp_client_list_destroy(udp_conn_list_t *n_udp_conn_list);
 bool add_to_known_udp_clients(udp_conn_list_t *n_udp_conn_list, struct db_udp_client_t new_db_udp_client, bool save_to_nvm);
