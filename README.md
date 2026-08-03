@@ -13,6 +13,38 @@
 A firmware for the popular ESP32 modules from Espressif Systems. Probably the cheapest way to
 communicate with your drone, UAV, UAS, ground-based vehicle or whatever you may call them.
 
+## Drop-in mavesp8266 replacement for drone shows (this fork)
+
+This fork turns DroneBridge for ESP32-C6 into a drop-in replacement for
+[mavesp8266](https://github.com/BeyondRobotix/mavesp8266) in Skybrush-based drone shows.
+A freshly flashed board works with a stock Skybrush server without any configuration on
+either side - same port scheme, same discovery behavior as a mavesp8266 radio:
+
+| Port  | Owner | Purpose |
+|-------|-------|---------|
+| 14550 | GCS   | Drone sends telemetry here; Skybrush listens here |
+| 14555 | Drone | Drone listens here; Skybrush sends swarm broadcasts (ARM/START/RTK) here |
+
+Behavior (verified against Skybrush server 2.49.1 with the stock `["default"]` connection preset):
+
+-   Boots into STA mode, joins the show Wi-Fi, falls back to a config AP if the network is absent
+-   Broadcasts telemetry to `<subnet>.255:14550` until a GCS answers, then switches to unicast
+    to the GCS IP at port 14550; resumes discovery if the GCS goes silent for 30 s
+-   Ignores broadcasts from other drones (MAVLink source sysid 1-250) - only GCS traffic
+    (sysid 251-255) is accepted, so drones on a shared show network never cross-register
+-   Never answers commands addressed to the flight controller - no ACK storms on swarm commands
+-   No radio self-heartbeat; RADIO_STATUS only while a GCS is connected
+-   Unique per-device mDNS hostname (`dronebridge-XXXXXX.local`, from the MAC)
+
+Deploying a fleet: flash, set the show network SSID/password and the FC UART pins/baud in the
+web GUI (AP `DroneBridge for ESP32`, http://192.168.2.1) - done. Both UDP ports remain
+configurable in the GUI for non-standard setups. Boards configured with firmware older than
+this scheme keep their stored `udp_listen_port=14550`; set it to 14555 (or factory-reset) to
+match a stock Skybrush server, or keep the server's `broadcast_port` override - both work.
+
+Unlike mavesp8266 there is no MAVLink parameter interface on component 240 (QGC's WiFi-Bridge
+settings page) - configuration is via the web GUI / REST API.
+
 It also allows for a fully transparent serial to WiFi pass-through link with variable packet size
 (As of release v2.0 no continuous stream of data is required anymore in MAVLink and transparent mode).
 
