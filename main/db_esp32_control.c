@@ -892,11 +892,27 @@ _Noreturn void control_module_udp_tcp() {
                     uint32_t dest_ip = ((struct in_pktinfo *) CMSG_DATA(cmsg))->ipi_addr.s_addr;
                     if (dest_ip == htonl(INADDR_BROADCAST) ||
                         (db_sta_subnet_broadcast_ip != 0 && dest_ip == db_sta_subnet_broadcast_ip)) {
-                        // Only drop broadcasts that originate from another drone's discovery broadcast
-                        // (source port == the port every DroneBridge binds, i.e. our own listen port).
-                        // GCS broadcasts (e.g. Skybrush ARM, RTK, START, TIMESYNC) come from ephemeral
-                        // source ports and must be forwarded.
-                        if (new_db_udp_client.udp_client.sin_port == htons(DB_PARAM_UDP_LISTEN_PORT)) {
+                        // Broadcast: distinguish GCS from other drones by the MAVLink source sysid of
+                        // the first frame. Drones use sysid 1-250 (Skybrush convention), GCS software
+                        // uses 251-255 (Skybrush server, QGC & Mission Planner: 255). Source ports are
+                        // not reliable for this: the Skybrush server broadcasts from the same socket it
+                        // listens on (source port 14550), other tools use ephemeral source ports.
+                        bool is_gcs_broadcast;
+                        if (DB_PARAM_SERIAL_PROTO == DB_SERIAL_PROTOCOL_MAVLINK) {
+                            uint8_t src_sysid = 0;
+                            if (recv_length > 5 && udp_buffer[0] == 0xFD) {
+                                src_sysid = udp_buffer[5];  // MAVLink v2: sysid at byte 5
+                            } else if (recv_length > 3 && udp_buffer[0] == 0xFE) {
+                                src_sysid = udp_buffer[3];  // MAVLink v1: sysid at byte 3
+                            }
+                            is_gcs_broadcast = src_sysid > 250;
+                        } else {
+                            // non-MAVLink protocols: fall back to the source-port heuristic
+                            // (every DroneBridge broadcasts from its bound listen port)
+                            is_gcs_broadcast = new_db_udp_client.udp_client.sin_port != htons(DB_PARAM_UDP_LISTEN_PORT);
+                        }
+                        if (!is_gcs_broadcast) {
+                            // another drone's discovery broadcast (or junk) - ignore it entirely
                             data_processed = true;
                             recv_length = 0;
                         }
