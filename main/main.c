@@ -231,8 +231,15 @@ void start_mdns_service() {
         printf("MDNS Init failed: %d\n", err);
         return;
     }
-    ESP_ERROR_CHECK(mdns_hostname_set("dronebridge"));
+    // MAC-suffixed hostname so every drone in a fleet gets a unique .local name -
+    // 1000 devices all claiming "dronebridge" would fight over the name via mDNS probing
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char mdns_host[32];
+    snprintf(mdns_host, sizeof(mdns_host), "dronebridge-%02x%02x%02x", mac[3], mac[4], mac[5]);
+    ESP_ERROR_CHECK(mdns_hostname_set(mdns_host));
     ESP_ERROR_CHECK(mdns_instance_name_set("DroneBridge for ESP32"));
+    ESP_LOGI(TAG, "mDNS hostname: %s.local", mdns_host);
 
     ESP_ERROR_CHECK(mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0));
     ESP_ERROR_CHECK(mdns_service_add(NULL, "_db_proxy", "_tcp", APP_PORT_PROXY, NULL, 0));
@@ -471,9 +478,9 @@ int db_init_wifi_clientmode() {
                                             pdMS_TO_TICKS(WIFI_STA_CONNECT_TIMEOUT_MS));
 
     if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "Connected to ap SSID:%s password:%s", DB_PARAM_WIFI_SSID, DB_PARAM_PASS);
+        ESP_LOGI(TAG, "Connected to ap SSID:%s", DB_PARAM_STA_SSID);
     } else {
-        ESP_LOGW(TAG, "WiFi client mode failed to connect to SSID:%s", DB_PARAM_WIFI_SSID);
+        ESP_LOGW(TAG, "WiFi client mode failed to connect to SSID:%s", DB_PARAM_STA_SSID);
         return -1;
     }
 
