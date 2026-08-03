@@ -274,10 +274,15 @@ void db_parse_mavlink_from_radio(int *tcp_clients, udp_conn_list_t *udp_conns, u
             fmav_frame_buf_to_msg(&msg, &result, mav_parser_rx_buf);
             if (result.res == FASTMAVLINK_PARSE_RESULT_OK) {
                 db_status_led_mark_radio_rx();
-                if (fmav_msg_is_for_me(db_get_mav_sys_id(), db_get_mav_comp_id(), &msg)) {
+                // Only react to messages explicitly addressed to this radio (mavesp8266-style).
+                // Broadcasts (target_sysid 0) were already forwarded to the FC above and the FC answers
+                // them. Reacting here as well would make every drone in a swarm respond to swarm-wide
+                // GCS commands (e.g. Skybrush ARM/START) with unsupported-ACKs carrying the FC's sysid.
+                if (msg.target_sysid != 0 && msg.target_sysid == db_get_mav_sys_id() &&
+                    (msg.target_compid == db_get_mav_comp_id() || msg.target_compid == MAV_COMP_ID_ALL)) {
                     handle_mavlink_message(&msg, tcp_clients, udp_conns, &fmav_status_radio, DB_MAVLINK_DATA_ORIGIN_RADIO);
                 } else {
-                    // message was not for us so ignore it
+                    // broadcast or addressed to another system - the FC already received it, nothing to do
                 }
             } else {
                 switch (result.res) {
