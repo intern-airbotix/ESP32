@@ -394,8 +394,10 @@ db_parameter_t db_param_udp_client_port = {
 };
 
 /**
- * Local UDP port the ESP32 binds to and listens on for incoming MAVLink/serial data (default 14550).
+ * Local UDP port the ESP32 binds to and listens on for incoming MAVLink/serial data (default 14555).
  * Outgoing packets to registered UDP clients are sent from this port as well.
+ * Default matches the mavesp8266 port scheme: the drone listens on 14555 while telemetry goes to the
+ * GCS on 14550 - a stock Skybrush server (broadcast_port=14555) works without any configuration.
  */
 db_parameter_t db_param_udp_listen_port = {
         .db_name = "udp_listen_port",
@@ -407,8 +409,8 @@ db_parameter_t db_param_udp_listen_port = {
         },
         .value = {
                 .db_param_u16 = {
-                        .value = APP_PORT_PROXY_UDP,
-                        .default_value = APP_PORT_PROXY_UDP,
+                        .value = APP_PORT_LISTEN_UDP,
+                        .default_value = APP_PORT_LISTEN_UDP,
                         .min = 1,
                         .max = UINT16_MAX,
                 }
