@@ -691,6 +691,9 @@ _Noreturn void control_module_esp_now() {
  * @param sta_list
  */
 void db_send_internal_telemetry_to_stations(int tel_sock, wifi_sta_list_t *sta_list, udp_conn_list_t *udp_conns) {
+    if (tel_sock < 0) {
+        return; // socket not open in this mode - nothing to send
+    }
     if ((DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP_LR || DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP)
         && udp_conns->size > 0 && sta_list->num > 0) {
         char addr_buf[32] = {0};
@@ -799,10 +802,13 @@ _Noreturn void control_module_udp_tcp() {
 
     udp_conn_list->udp_socket = db_open_serial_udp_socket();
     int db_internal_telem_udp_sock = -1;
-    if (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP_LR || DB_PARAM_RADIO_MODE == DB_WIFI_MODE_STA) {
+    if (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP || DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP_LR ||
+        DB_PARAM_RADIO_MODE == DB_WIFI_MODE_STA) {
+        // AP & AP_LR send the per-station RSSI multicast, STA receives it. Plain AP was missing here
+        // while db_send_internal_telemetry_to_stations() explicitly handles it -> sendto() on fd -1
+        // spammed "Internal telemetry sendto failed. errno: 9" whenever a station was connected.
         db_internal_telem_udp_sock = db_open_int_telemetry_udp_socket();
     } else {
-        // other Wi-Fi modes do not need this. Only Wi-Fi stations will receive if connected to LR access point.
         // ESP-NOW uses different sockets/systems
     }
     uint8_t udp_buffer[UDP_BUF_SIZE];
