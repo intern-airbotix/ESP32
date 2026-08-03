@@ -852,9 +852,11 @@ _Noreturn void control_module_udp_tcp() {
         }
         // handle incoming UDP data on main port 14550 - Read UDP and forward to UART.
         // recvmsg with IP_PKTINFO instead of recvfrom: we need the DESTINATION address of each datagram to filter
-        // out broadcasts in STA mode. Many drones share one network in a drone show - every drone's discovery
+        // out certain broadcasts in STA mode. Many drones share one network in a drone show - every drone's discovery
         // broadcast is relayed to all other drones by the AP. Those must never be forwarded to the FC or register
-        // the other drone as a UDP client. A real GCS always answers with unicast, which passes this filter.
+        // the other drone as a UDP client. However, GCS software (e.g. Skybrush) also uses broadcast for swarm-wide
+        // commands (ARM, RTK, START, TIMESYNC). To distinguish: discovery broadcasts come FROM the DroneBridge
+        // MAVLink port (14550), while GCS broadcasts come from ephemeral source ports.
         struct iovec udp_iov = {.iov_base = udp_buffer, .iov_len = UDP_BUF_SIZE};
         uint8_t udp_cmsg_buf[CMSG_SPACE(sizeof(struct in_pktinfo))];
         struct msghdr udp_msg = {
@@ -872,8 +874,13 @@ _Noreturn void control_module_udp_tcp() {
                     uint32_t dest_ip = ((struct in_pktinfo *) CMSG_DATA(cmsg))->ipi_addr.s_addr;
                     if (dest_ip == htonl(INADDR_BROADCAST) ||
                         (db_sta_subnet_broadcast_ip != 0 && dest_ip == db_sta_subnet_broadcast_ip)) {
-                        data_processed = true; // we did read something - keep the loop responsive
-                        recv_length = 0;       // broadcast from another drone - ignore it entirely
+                        // Only drop broadcasts that originate from another drone's discovery broadcast
+                        // (source port == DroneBridge MAVLink port). GCS broadcasts (e.g. Skybrush ARM,
+                        // RTK, START, TIMESYNC) come from ephemeral source ports and must be forwarded.
+                        if (new_db_udp_client.udp_client.sin_port == htons(APP_PORT_PROXY_UDP)) {
+                            data_processed = true;
+                            recv_length = 0;
+                        }
                     }
                     break;
                 }
