@@ -55,6 +55,20 @@ volatile bool db_udp_reinit_pending = false;
 volatile uint32_t db_sta_subnet_broadcast_ip = 0; // network byte order; 0 = unknown/not connected. Set on IP_EVENT_STA_GOT_IP.
 
 /**
+ * Destination UDP port for all telemetry to the GCS in STA mode - mavesp8266-style fixed "host port".
+ * Used for the discovery broadcast and for unicast once a GCS IP is learned. We never reply to the
+ * sender's source port: a GCS may use several sockets (e.g. Skybrush broadcasts swarm commands from an
+ * ephemeral port) and answering each socket would create duplicate telemetry streams.
+ * @return configured udp_client_port if set, default MAVLink UDP port otherwise
+ */
+static uint16_t db_sta_gcs_port(void) {
+    if (db_param_udp_client_port.value.db_param_u16.value != 0) {
+        return db_param_udp_client_port.value.db_param_u16.value;
+    }
+    return APP_PORT_PROXY_UDP;
+}
+
+/**
  * Opens non-blocking UDP socket used for WiFi to UART communication. Does also accept broadcast packets just in case.
  * Binds to the user configured local UDP listen port (db_param_udp_listen_port, default 14550).
  * @return returns socket file descriptor
@@ -251,7 +265,7 @@ void db_send_to_all_udp_clients(const uint8_t *data, uint data_length) {
         // (SO_BROADCAST is already enabled on this socket at creation in db_open_serial_udp_socket)
         struct sockaddr_in broadcast_addr = {
             .sin_family = AF_INET,
-            .sin_port = htons(APP_PORT_PROXY_UDP),
+            .sin_port = htons(db_sta_gcs_port()),
             .sin_addr.s_addr = htonl(INADDR_BROADCAST),
         };
         if (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP || DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP_LR) {
@@ -265,7 +279,7 @@ void db_send_to_all_udp_clients(const uint8_t *data, uint data_length) {
         }
         if (!discovery_broadcast_announced) {
             ESP_LOGI(TAG, "No UDP client known - broadcasting telemetry to %s:%i until a GCS replies",
-                     inet_ntoa(broadcast_addr.sin_addr), APP_PORT_PROXY_UDP);
+                     inet_ntoa(broadcast_addr.sin_addr), db_sta_gcs_port());
             discovery_broadcast_announced = true;
         }
         sendto(udp_conn_list->udp_socket, data, data_length, 0,
@@ -525,7 +539,11 @@ add_to_known_udp_clients(udp_conn_list_t *n_udp_conn_list, struct db_udp_client_
         }
     }
     if (n_udp_conn_list->size == MAX_UDP_CLIENTS) { // Check if the list is full
-        return false; // Do nothing
+        char ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(new_db_udp_client.udp_client.sin_addr), ip_str, INET_ADDRSTRLEN);
+        ESP_LOGW(TAG, "UDP client list full (%i entries) - not adding %s:%i", MAX_UDP_CLIENTS,
+                 ip_str, ntohs(new_db_udp_client.udp_client.sin_port));
+        return false;
     }
     new_db_udp_client.last_recv_tick = (uint32_t) xTaskGetTickCount(); // start the idle-expiry clock
     n_udp_conn_list->db_udp_clients[n_udp_conn_list->size] = new_db_udp_client; // Copy the element data to the end of the array
@@ -875,9 +893,10 @@ _Noreturn void control_module_udp_tcp() {
                     if (dest_ip == htonl(INADDR_BROADCAST) ||
                         (db_sta_subnet_broadcast_ip != 0 && dest_ip == db_sta_subnet_broadcast_ip)) {
                         // Only drop broadcasts that originate from another drone's discovery broadcast
-                        // (source port == DroneBridge MAVLink port). GCS broadcasts (e.g. Skybrush ARM,
-                        // RTK, START, TIMESYNC) come from ephemeral source ports and must be forwarded.
-                        if (new_db_udp_client.udp_client.sin_port == htons(APP_PORT_PROXY_UDP)) {
+                        // (source port == the port every DroneBridge binds, i.e. our own listen port).
+                        // GCS broadcasts (e.g. Skybrush ARM, RTK, START, TIMESYNC) come from ephemeral
+                        // source ports and must be forwarded.
+                        if (new_db_udp_client.udp_client.sin_port == htons(DB_PARAM_UDP_LISTEN_PORT)) {
                             data_processed = true;
                             recv_length = 0;
                         }
@@ -897,10 +916,14 @@ _Noreturn void control_module_udp_tcp() {
                 write_to_serial(udp_buffer, recv_length);
             }
             // all devices that send us UDP data will be added to the list of UDP receivers
-            // Allows to register new app on different port. Used e.g. for UDP conn setup in sta-mode.
-            // Devices/Ports added this way cannot be removed in sta-mode since UDP is connectionless, and we cannot
-            // determine if the client is still existing. This will blow up the list connected devices.
-            // In AP-Mode the devices can be removed based on the IP/MAC address
+            // In AP-Mode clients register with their source port and can be removed based on the IP/MAC address.
+            if (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_STA) {
+                // mavesp8266-style: learn only the GCS IP - telemetry always goes to the fixed GCS port,
+                // never back to the sender's source port. All sockets of one GCS host collapse into a
+                // single client entry, so no duplicate streams to ephemeral ports (e.g. Skybrush's
+                // broadcast socket). Idle entries expire via db_remove_expired_udp_clients().
+                new_db_udp_client.udp_client.sin_port = htons(db_sta_gcs_port());
+            }
             add_to_known_udp_clients(udp_conn_list, new_db_udp_client, false);
         } else {
             // received nothing, keep on going
