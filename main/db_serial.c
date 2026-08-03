@@ -287,7 +287,12 @@ void db_parse_mavlink_from_radio(int *tcp_clients, udp_conn_list_t *udp_conns, u
             } else {
                 switch (result.res) {
                     case FASTMAVLINK_PARSE_RESULT_MSGID_UNKNOWN:
-                        ESP_LOGW(TAG, "fastmavlink parser had an error FASTMAVLINK_PARSE_RESULT_MSGID_UNKNOWN msgID: %lu", result.msgid);
+                        // Not an error: the frame was already forwarded to the FC above. GCS software
+                        // legitimately uses messages outside our compiled dialect - e.g. Skybrush wraps
+                        // its whole show-control protocol in ArduPilot DATA16/32/64/96 (msgID 169-172)
+                        // at ~1 Hz. A bridge must pass those through without spamming the log at packet
+                        // rate. Same policy as mavesp8266 (forward unknown, stay silent).
+                        ESP_LOGD(TAG, "Radio: unknown msgID %lu - forwarded to serial without CRC check", result.msgid);
                         break;
                     case FASTMAVLINK_PARSE_RESULT_LENGTH_ERROR:
                         ESP_LOGW(TAG, "fastmavlink parser had an error FASTMAVLINK_PARSE_RESULT_LENGTH_ERROR msgID: %lu", result.msgid);
