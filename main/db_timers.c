@@ -81,8 +81,11 @@ void db_timer_mavlink_heartbeat_callback(TimerHandle_t pxTimer) {
             // In AP LR mode and in ESP-NOW GND mode the heartbeat has to be emitted via serial directly to the GCS
             uint16_t length = db_mav_create_heartbeat(buff, &fmav_status_serial);
             write_to_serial(buff, length);
+        } else if (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_STA || DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP) {
+            // mavesp8266-style: the radio does not emit its own heartbeat over Wi-Fi. The FC's heartbeat
+            // flows through anyway; a radio heartbeat per drone only adds airtime in large fleets.
         } else {
-            // Send heartbeat via radio interface
+            // Send heartbeat via radio interface (ESP-NOW AIR, BLE)
             uint16_t length = db_mav_create_heartbeat(buff, &fmav_status_radio);
             db_send_to_all_radio_clients(buff, length);
         }
@@ -123,6 +126,10 @@ void db_timer_mavlink_radiostatus_callback(TimerHandle_t pxTimer) {
     }
     static uint8_t buff[296];
     // ESP32s that are connected to a flight controller via UART will send RADIO_STATUS messages to the GND
+    if (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_STA && udp_conn_list != NULL && udp_conn_list->size == 0 &&
+        num_connected_tcp_clients == 0) {
+        return; // mavesp8266-style: no RADIO_STATUS while no GCS is known (discovery phase)
+    }
     if (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_STA || DB_PARAM_RADIO_MODE == DB_WIFI_MODE_ESPNOW_AIR ||
         DB_PARAM_RADIO_MODE == DB_BLUETOOTH_MODE) {
         // ToDo: For BLE only the last connected client is considered.
