@@ -334,10 +334,14 @@ void handle_mavlink_message(fmav_message_t *new_msg, int *tcp_clients, udp_conn_
                     // This means we are connected to the FC since we only parse mavlink on UART and thus only see the
                     // device we are connected to via UART
                     DB_MAV_SYS_ID = new_msg->sysid;
+                    // Track the FC armed state on every heartbeat, independent of the radio-off feature.
+                    // Used to suppress the runtime STA->AP reboot while flying (see db_check_sta_link_timeout).
+                    bool fc_armed = (payload.base_mode & MAV_MODE_FLAG_SAFETY_ARMED) ||
+                                    (payload.system_status > MAV_STATE_STANDBY &&
+                                     payload.system_status != MAV_STATE_POWEROFF);
+                    DB_FC_ARMED = fc_armed;
                     // Check if FC is armed and the Wi-Fi switch based on armed status is configured by the user
-                    if (DB_PARAM_DIS_RADIO_ON_ARM &&
-                    (payload.base_mode & MAV_MODE_FLAG_SAFETY_ARMED ||
-                    (payload.system_status > MAV_STATE_STANDBY && payload.system_status != MAV_STATE_POWEROFF))) {
+                    if (DB_PARAM_DIS_RADIO_ON_ARM && fc_armed) {
                         // autopilot indicates it is armed
                         db_set_radio_status(false);
                     } else {

@@ -838,6 +838,21 @@ _Noreturn void control_module_udp_tcp() {
             db_register_saved_udp_host();
             ESP_LOGI(TAG, "Wi-Fi (re)connect: UDP socket reinitialized & configured UDP host re-registered");
         }
+        // Self-heal a failed UDP socket. db_open_serial_udp_socket() can return -1 (transient socket()/bind()
+        // failure, e.g. racing an interface change or ENOMEM under load). Without this retry the socket stays
+        // -1 forever: the drone is associated on the AP but silently deaf and mute. Retry ~once per second.
+        if (udp_conn_list->udp_socket < 0) {
+            static TickType_t last_udp_reopen_tick = 0;
+            TickType_t now_tick = xTaskGetTickCount();
+            if (last_udp_reopen_tick == 0 || (now_tick - last_udp_reopen_tick) >= pdMS_TO_TICKS(1000)) {
+                last_udp_reopen_tick = now_tick;
+                udp_conn_list->udp_socket = db_open_serial_udp_socket();
+                if (udp_conn_list->udp_socket >= 0) {
+                    db_register_saved_udp_host();
+                    ESP_LOGW(TAG, "UDP socket was down - successfully reopened and re-registered configured host");
+                }
+            }
+        }
         // Read incoming wireless data (Wi-Fi)
         // Wi-Fi based modes that use TCP and UDP communication
         bool data_processed = false;

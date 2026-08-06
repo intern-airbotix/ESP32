@@ -110,8 +110,12 @@ db_parameter_t db_param_wifi_en_gn = {
         },
         .value = {
                 .db_param_u8 = {
-                        .value = false,
-                        .default_value = false,
+                        // Default to 802.11 b/g/n in STA mode. With this false the STA link falls back to
+                        // 11b-only, which caps throughput and forces ERP protection on the whole BSS when
+                        // many drones share one show AP. Set to false only if you specifically want the
+                        // long-range (LR) mode for a point-to-point link.
+                        .value = true,
+                        .default_value = true,
                         .min = false,
                         .max = true,
                 }

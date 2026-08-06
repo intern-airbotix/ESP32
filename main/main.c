@@ -77,6 +77,8 @@ static const char *TAG = "DB_ESP32";
 
 char CURRENT_CLIENT_IP[IP4ADDR_STRLEN_MAX] = "192.168.2.1";
 uint8_t DB_RADIO_IS_OFF = false;  // keep track if we switched Wi-Fi/BLE off already - by default a radio is started
+volatile bool DB_FC_ARMED = false;  // set from the FC heartbeat (base_mode/system_status). Used to suppress the
+                                    // runtime STA->AP reboot while the aircraft is armed (see db_check_sta_link_timeout).
 db_esp_signal_quality_t db_esp_signal_quality = {.air_rssi = UINT8_MAX, .air_noise_floor = UINT8_MAX, .gnd_rssi= UINT8_MAX, .gnd_noise_floor = UINT8_MAX};
 wifi_sta_list_t wifi_sta_list = {.num = 0};
 uint8_t LOCAL_MAC_ADDRESS[6];
@@ -554,7 +556,11 @@ static void db_start_ap_fallback(void) {
  */
 void db_check_sta_link_timeout(void) {
     if (DB_PARAM_RADIO_MODE != DB_WIFI_MODE_STA) return; // already left STA mode
-    if (DB_RADIO_IS_OFF) return;                         // autopilot armed -> radio off, do not reboot
+    if (DB_RADIO_IS_OFF) return;                         // radio commanded off -> do not reboot
+    if (DB_FC_ARMED) return;                             // aircraft armed (in flight) -> never reboot the radio:
+                                                         // esp_wifi_connect() already retries on every disconnect,
+                                                         // and a reboot here would black out telemetry and could
+                                                         // strand the drone in AP mode for the rest of the flight.
     if (!s_sta_was_ever_connected) return;               // never connected -> boot path owns this case
     if (!s_sta_disconnected) return;                     // currently connected -> nothing to do
     if ((xTaskGetTickCount() - s_sta_disconnect_tick) >= pdMS_TO_TICKS(WIFI_STA_CONNECT_TIMEOUT_MS)) {
