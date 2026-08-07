@@ -34,3 +34,76 @@ If DroneBridge is running in access point mode and the computer is connected to 
 
 # MCP & Documentation for esp-idf
 There is an espressif-docs MCP available for using the esp-idf framework.
+
+---
+
+# AIRBOTIX FORK — rules for this fork specifically
+
+Everything above is upstream DroneBridge guidance. This fork (deepak-airbotix/esp32-firmware-drone-bridge)
+targets **ESP32-C6 only** and is a **drop-in mavesp8266 replacement for Skybrush drone shows**, so the
+upstream limit "do not add features specifically required for drone light shows" does **not** apply here —
+show support is the whole point of the fork. The environment is **Linux**, not PowerShell:
+`source ~/esp/esp-idf/export.sh` then `idf.py …`.
+
+**Read `CONTEXT/` before doing anything non-trivial** — full project history, bench setup, wire
+behaviour, validation results and known-unproven items.
+
+## Hard rules
+
+1. **Build gate — always.** `idf.py set-target esp32c6` **before** `idf.py build`. `idf.py fullclean`
+   wipes the target and the build silently reverts to `esp32`, where the USB-JTAG console option does
+   not exist and is ignored — producing a wrong-chip image with no error. Before packaging, verify all three:
+   ```
+   grep -E '^CONFIG_IDF_TARGET="esp32c6"|^CONFIG_LWIP_NETBUF_RECVINFO=y|^CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y' sdkconfig
+   ```
+   Without `CONFIG_LWIP_NETBUF_RECVINFO` the whole broadcast filter is **silently disabled**.
+2. **Do not use `create_release_zip.*` for fleet images** — its `config_defaults/` files drop
+   `CONFIG_LWIP_NETBUF_RECVINFO`. Build with plain `idf.py build` from a clean checkout.
+3. **Never `erase_flash` a configured fleet board** — it wipes NVS (Wi-Fi credentials, static IP, UART
+   pins, baud). Flash the four offsets instead (`bootloader.bin` 0x0, `partition-table.bin` 0x8000,
+   `db_esp32.bin` 0x10000, `www.bin` 0x190000); that preserves configuration. The **merged** bin is
+   fresh-install only — it wipes NVS.
+4. **Flashing does not change `udp_listen_port`** — stored NVS wins over the compiled default. Changing
+   it is an explicit `POST /api/settings` + readback, per board.
+5. **Do not modify flight-controller parameters** unless asked. Reading is fine.
+6. **Check `udevadm info --query=property /dev/ttyACM*` before opening or flashing any port** — bench
+   hardware may belong to the user or another agent, and assignments shuffle on every replug.
+7. **Do not push or publish releases unless asked.**
+
+## Wire behaviour (v2.0)
+
+```
+drone listens 14555  |  telemetry to GCS on 14550  |  TCP 5760  |  web GUI :80
+no client known -> broadcast telemetry to <subnet>.255:14550
+GCS packet in   -> register GCS IP at the fixed GCS port -> unicast telemetry
+broadcast rule  -> accept if MAVLink src sysid > 250 (GCS), drop 1-250 (peer drone)
+30 s idle       -> client expires -> discovery resumes (pinned clients never expire)
+```
+
+## Firmware map
+
+- `main/db_esp32_control.c` — control loop, UDP socket, **broadcast filter** (sysid-based, STA only),
+  client list (8 slots, 30 s idle expiry), `db_sta_gcs_port()`, discovery broadcast, internal telemetry.
+- `main/db_serial.c` — two MAVLink parsers; both forward frames **before** result checks so unknown
+  message IDs pass through. Radio side has the targeting gate; the serial side must stay permissive.
+- `main/db_timers.c` — heartbeat (no-op in Wi-Fi modes) and RADIO_STATUS callbacks.
+- `main/main.c` — Wi-Fi init, static IP, AP fallback, mDNS, `db_check_sta_link_timeout()` (80 s STA-loss
+  reboot, suppressed while `DB_FC_ARMED`).
+- `main/db_mavlink_msgs.c` — sets `DB_MAV_SYS_ID` and `DB_FC_ARMED` from the FC heartbeat.
+
+MAVLink is fastmavlink with the **common dialect only** — ArduPilot messages (DATA16 = 169 etc.) parse
+as "unknown" and are forwarded untouched. That is intentional, not a bug.
+
+## Testing on Linux
+
+- Fastest probe (no auth): `GET /api/system/stats` → `read_bytes`, `serial_dec_mav_msgs`, `udp_clients`.
+- Skybrush test server + checker: `~/Documents/drone_show/skybrush-test-server/`
+  (**2.25.2 is the production version** — use `skyenv-2.25`).
+- Fleet provisioning: `~/dronebridge-c6-report/provision_drone.py`.
+- Opening the ESP's USB serial port **resets the board**, and asserting DTR/RTS holds it in reset —
+  open with `dtr=False, rts=False` (pyserial), or the board looks dead.
+
+## Conventions
+
+Short imperative commit subject, body explaining *why*. Trailer:
+`Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`
