@@ -43,25 +43,20 @@
 #define MAX_LTM_FRAMES_IN_BUFFER    5
 
 
+// Serial defaults per board. Baud is 921600 rather than the upstream/ArduPilot 57600 because every
+// airframe this fork flies runs its telemetry serial at 921600, and 57600 leaves no headroom for RTK
+// injection. Only affects boards with no stored value - an existing board keeps whatever is in NVS.
 #ifdef CONFIG_DB_OFFICIAL_BOARD_1_X
 #define DB_DEFAULT_UART_TX_PIN GPIO_NUM_5
 #define DB_DEFAULT_UART_RX_PIN GPIO_NUM_4
 #define DB_DEFAULT_UART_RTS_PIN GPIO_NUM_6
 #define DB_DEFAULT_UART_CTS_PIN GPIO_NUM_7
-// 921600, not the ArduPilot/upstream default of 57600: every airframe this fork flies runs its
-// telemetry serial at 921600, and 57600 leaves no headroom for RTK injection. A freshly flashed
-// board is therefore usable with the fleet without first correcting the baud rate. Note this only
-// affects boards with no stored value - an existing board keeps whatever is in NVS.
 #define DB_DEFAULT_UART_BAUD_RATE 921600
 #elif CONFIG_DB_OFFICIAL_BOARD_1_X_C6
 #define DB_DEFAULT_UART_TX_PIN GPIO_NUM_21
 #define DB_DEFAULT_UART_RX_PIN GPIO_NUM_2
 #define DB_DEFAULT_UART_RTS_PIN GPIO_NUM_22
 #define DB_DEFAULT_UART_CTS_PIN GPIO_NUM_23
-// 921600, not the ArduPilot/upstream default of 57600: every airframe this fork flies runs its
-// telemetry serial at 921600, and 57600 leaves no headroom for RTK injection. A freshly flashed
-// board is therefore usable with the fleet without first correcting the baud rate. Note this only
-// affects boards with no stored value - an existing board keeps whatever is in NVS.
 #define DB_DEFAULT_UART_BAUD_RATE 921600
 #elif CONFIG_DB_GENERIC_BOARD
 // initially set pins to 0 to allow the start of the system on all boards. User has to set the correct pins
@@ -69,10 +64,6 @@
 #define DB_DEFAULT_UART_RX_PIN GPIO_NUM_0
 #define DB_DEFAULT_UART_RTS_PIN GPIO_NUM_0
 #define DB_DEFAULT_UART_CTS_PIN GPIO_NUM_0
-// 921600, not the ArduPilot/upstream default of 57600: every airframe this fork flies runs its
-// telemetry serial at 921600, and 57600 leaves no headroom for RTK injection. A freshly flashed
-// board is therefore usable with the fleet without first correcting the baud rate. Note this only
-// affects boards with no stored value - an existing board keeps whatever is in NVS.
 #define DB_DEFAULT_UART_BAUD_RATE 921600
 #else
 // someone fucked up the config - fallback to generic config
@@ -80,10 +71,6 @@
 #define DB_DEFAULT_UART_RX_PIN GPIO_NUM_0
 #define DB_DEFAULT_UART_RTS_PIN GPIO_NUM_0
 #define DB_DEFAULT_UART_CTS_PIN GPIO_NUM_0
-// 921600, not the ArduPilot/upstream default of 57600: every airframe this fork flies runs its
-// telemetry serial at 921600, and 57600 leaves no headroom for RTK injection. A freshly flashed
-// board is therefore usable with the fleet without first correcting the baud rate. Note this only
-// affects boards with no stored value - an existing board keeps whatever is in NVS.
 #define DB_DEFAULT_UART_BAUD_RATE 921600
 #endif
 
