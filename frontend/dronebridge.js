@@ -11,6 +11,7 @@ let esp_chip_model = 0;		// according to get_esp_chip_model_str()
 let recv_ser_bytes = 0;		// Total bytes received from serial interface
 let serial_dec_mav_msgs = 0;	// Total MAVLink messages decoded from serial interface
 let set_telem_proto = null;		// Telemetry protocol received by the ESP32
+let wifi_5ghz_supported = 0;	// 1 when api/system/info reports a chip with 5 GHz support (ESP32-C5), else 0
 
 function change_radio_dis_arm_visibility() {
 	// we only support this feature when MAVLink or LTM are set AND when a standard Wi-Fi mode or BLE is enabled
@@ -56,10 +57,177 @@ function change_ap_ip_visibility() {
 		// ESP-NOW: no SSID/pass needed
 		el.lr_disclaimer_div.style.display = "block";
 	} else if (mode === "6") {
-		// BLE: no SSID/pass needed
+		// BLE: the configuration access point keeps running next to Bluetooth, so its SSID/pass, IP and channel apply
+		el.ap_section_div.style.display     = "block";
+		el.ap_ip_div.style.display          = "block";
+		el.ap_channel_div.style.display     = "block";
 		el.ble_disclaimer_div.style.display = "block";
 	}
 	change_radio_dis_arm_visibility();
+	change_wifi_band_visibility();	// may swap the 2.4 GHz channel row for the 5 GHz one
+}
+
+/**
+ * Checks whether change_ap_ip_visibility() shows the 2.4 GHz "ap_channel_div" row for the given mode.
+ * Those are the modes of this fork that host an access point with a user configurable 2.4 GHz channel:
+ * Wi-Fi client with AP fallback (2), Wi-Fi access point LR mode (3) and Bluetooth LE with its configuration AP (6).
+ * Bluetooth LE (6) also hosts a configuration access point, but change_ap_ip_visibility() hides its
+ * channel row - it is only shown by change_wifi_band_visibility() on chips with a 5 GHz radio, see
+ * mode_band_configurable().
+ * @param mode Value of the esp32_mode select as string
+ * @returns {boolean} true when change_ap_ip_visibility() shows the access point channel row
+ */
+function mode_hosts_ap(mode) {
+	return mode === "2" || mode === "3" || mode === "6";
+}
+
+/**
+ * Checks whether the firmware honours the wifi_band parameter in the given ESP32 mode.
+ * The band is applied to the AP fallback of the Wi-Fi client mode (2) and to the configuration access
+ * point that runs in parallel to Bluetooth LE (6). In both cases a stored 5 GHz band makes the access
+ * point unreachable for 2.4 GHz only devices, so the setting must be visible and editable there.
+ * @param mode Value of the esp32_mode select as string
+ * @returns {boolean} true when the band select must be editable in this mode
+ */
+function mode_band_configurable(mode) {
+	return mode === "2" || mode === "6";
+}
+
+/**
+ * Checks whether the access point of the given mode is the only Wi-Fi interface, i.e. there is no
+ * station interface that could make use of the "auto" band setting.
+ * @param mode Value of the esp32_mode select as string
+ * @returns {boolean} true when the mode has no Wi-Fi station interface
+ */
+function mode_is_ap_only(mode) {
+	return mode === "6";
+}
+
+/**
+ * Checks whether the given ESP32 mode is tied to the 2.4 GHz band by the radio protocol it uses.
+ * Wi-Fi long range mode and ESP-NOW are 2.4 GHz only, no matter what the chip supports.
+ * @param mode Value of the esp32_mode select as string
+ * @returns {boolean} true when the mode can only ever use 2.4 GHz
+ */
+function mode_is_24ghz_only(mode) {
+	return mode === "3" || mode === "4" || mode === "5";
+}
+
+/**
+ * Restricts a Wi-Fi band value to the options offered by the GUI (0 = 2.4 GHz, 1 = 5 GHz, 2 = auto).
+ * Anything else - e.g. a value from a newer firmware - falls back to 2.4 GHz.
+ * @param value Wi-Fi band value as string
+ * @returns {string} A band value that is guaranteed to exist as an option of the wifi_band select
+ */
+function sanitize_wifi_band(value) {
+	return (value === "0" || value === "1" || value === "2") ? value : "0";
+}
+
+/**
+ * Locks/unlocks a select so the user cannot change it while its value is still submitted with the form.
+ * The disabled attribute is deliberately not used: a disabled control would be dropped by the browser
+ * on a normal form submit and is easy to overlook when the form is serialised (see toJSONString()).
+ * @param select The select element to lock or unlock
+ * @param locked true to lock the element, false to make it editable again
+ */
+function set_select_locked(select, locked) {
+	if (locked) {
+		select.classList.add("locked_input");
+		select.setAttribute("tabindex", "-1");
+		select.setAttribute("aria-disabled", "true");
+	} else {
+		select.classList.remove("locked_input");
+		select.removeAttribute("tabindex");
+		select.removeAttribute("aria-disabled");
+	}
+}
+
+/**
+ * Builds the warning shown when an access point is configured for the 5 GHz band. It names the channel
+ * currently selected in the wifi_chan_5g select so the user knows what to look for and that a 2.4 GHz
+ * only device (e.g. an older phone) will not see the access point.
+ * @param ap_name How to call the access point in the hint, e.g. "fallback access point"
+ * @returns {string} The hint text
+ */
+function five_ghz_ap_hint(ap_name) {
+	const chan_sel = document.getElementById("wifi_chan_5g");
+	const chan = (chan_sel != null && chan_sel.value !== "") ? chan_sel.value : "?";
+	return "The " + ap_name + " will use 5 GHz channel " + chan + "; use a 5 GHz-capable device to reach it.";
+}
+
+/**
+ * Shows/hides & locks the Wi-Fi band selection and shows the channel selection that matches the band.
+ * Called whenever the ESP32 mode, the band or the 5 GHz channel changes, once the system info is known
+ * and after the settings have been loaded. Rules:
+ *  - chip without 5 GHz support (or firmware not reporting "wifi_5ghz"): no band row at all, GUI behaves
+ *    exactly like before
+ *  - Wi-Fi client with AP fallback (2) & Bluetooth LE (6): band selectable, the channel select follows
+ *    the band. "Auto" needs a station interface and is therefore not selectable in BLE mode, where the
+ *    access point is the only Wi-Fi interface
+ *  - AP LR (3) & ESP-NOW (4, 5): band row visible but locked, because the firmware always uses 2.4 GHz
+ *    in those modes. The stored value is left untouched so it is not overwritten when the form is saved
+ *  - an unknown mode: band row hidden
+ * The band select is never given the disabled attribute and its value is never changed by this function:
+ * the settings POST contains every select of the form, so writing to it would destroy the stored band.
+ */
+function change_wifi_band_visibility() {
+	const band_div = document.getElementById("wifi_band_div");
+	const band_sel = document.getElementById("wifi_band");
+	const auto_opt = document.getElementById("wifi_band_auto_opt");
+	const hint_div = document.getElementById("wifi_band_hint");
+	const chan_5g_div = document.getElementById("wifi_chan_5g_div");
+	const ap_channel_div = document.getElementById("ap_channel_div");
+	const mode = document.getElementById("esp32_mode").value;
+	if (band_div == null || band_sel == null || auto_opt == null || hint_div == null || chan_5g_div == null ||
+		ap_channel_div == null) {
+		return;	// markup not available - nothing to do
+	}
+	const band_configurable = mode_band_configurable(mode);
+	const locked = mode_is_24ghz_only(mode);
+	if (wifi_5ghz_supported !== 1 || (!band_configurable && !locked)) {
+		// 2.4 GHz only hardware/firmware or a mode without any Wi-Fi band (unknown mode)
+		band_div.style.display = "none";
+		hint_div.style.display = "none";
+		chan_5g_div.style.display = "none";
+		set_select_locked(band_sel, false);
+		auto_opt.disabled = false;
+		if (mode_hosts_ap(mode)) {
+			ap_channel_div.style.display = "block";
+		}
+		return;
+	}
+	band_div.style.display = "block";
+	// auto (2.4 + 5 GHz) is a station feature - it cannot be used when the AP is the only interface
+	auto_opt.disabled = mode_is_ap_only(mode);
+	set_select_locked(band_sel, locked);
+	const band = band_sel.value;
+	let hint = "";
+	if (locked) {
+		hint = "2.4 GHz only in this mode; the stored band is kept for other modes.";
+	} else if (mode === "6") {
+		hint = "Applies to the configuration access point that runs alongside Bluetooth LE.";
+		if (band === "1") {
+			hint += " " + five_ghz_ap_hint("configuration access point");
+		} else if (band === "2") {
+			hint += " Auto is client mode only - the access point will use 2.4 GHz.";
+		}
+	} else if (mode === "2") {
+		if (band === "1") {
+			hint = five_ghz_ap_hint("fallback access point");
+		} else if (band === "2") {
+			hint = "Auto applies to the client connection - the AP fallback uses the 2.4 GHz channel.";
+		}
+	}
+	hint_div.textContent = hint;
+	hint_div.style.display = (hint === "") ? "none" : "block";
+	// only one of the two channel selects is ever visible
+	const use_5g_chan = (band === "1" && band_configurable);
+	chan_5g_div.style.display = use_5g_chan ? "block" : "none";
+	if (use_5g_chan) {
+		ap_channel_div.style.display = "none";
+	} else if (mode_hosts_ap(mode) || band_configurable) {
+		ap_channel_div.style.display = "block";
+	}
 }
 
 function change_msp_ltm_visibility(){
@@ -233,6 +401,10 @@ function get_system_info() {
 		} else {
 			document.getElementById("ant_use_ext_div").style.display = "none";
 		}
+		// only offer the Wi-Fi band selection on chips that support 5 GHz (ESP32-C5). Firmware that does
+		// not know the "wifi_5ghz" key at all keeps the 2.4 GHz only GUI.
+		wifi_5ghz_supported = (parseInt(json_data["wifi_5ghz"]) === 1) ? 1 : 0;
+		change_wifi_band_visibility();
 	}).catch(error => {
 		conn_status = 0
 		error.message;
@@ -247,6 +419,7 @@ function update_conn_status() {
 	else {
 		document.getElementById("web_conn_status").innerHTML = "<span class=\"dot_red\"></span> disconnected from ESP32"
 		document.getElementById("current_client_ip").innerHTML = ""
+		document.getElementById("radio_status").textContent = ""
 	}
 	if (conn_status !== old_conn_status) {
 		if (conn_status === 1) {
@@ -270,6 +443,45 @@ function update_conn_status() {
 		}
 	}
 	old_conn_status = conn_status
+}
+
+/**
+ * Display the band & channel the radio is currently using, e.g. "Radio: 5 GHz, channel 36".
+ * Firmware that does not report "wifi_band_mode"/"wifi_channel" leaves the line empty.
+ * @param json_data Parsed JSON response of api/system/stats
+ */
+function update_radio_status(json_data) {
+	let radio_div = document.getElementById("radio_status");
+	if (radio_div == null) {
+		return;
+	}
+	if (!('wifi_band_mode' in json_data) && !('wifi_channel' in json_data)) {
+		radio_div.textContent = "";
+		return;
+	}
+	let band_str = "";
+	switch (parseInt(json_data["wifi_band_mode"])) {
+		case 1:
+			band_str = "2.4 GHz";
+			break;
+		case 2:
+			band_str = "5 GHz";
+			break;
+		case 3:
+			band_str = "auto (2.4 + 5 GHz)";
+			break;
+		default:	// 0 or missing: the ESP32 does not know the band
+			break;
+	}
+	let channel = parseInt(json_data["wifi_channel"]);
+	let parts = [];
+	if (band_str !== "") {
+		parts.push(band_str);
+	}
+	if (!isNaN(channel) && channel > 0) {
+		parts.push("channel " + channel);
+	}
+	radio_div.textContent = "Radio: " + (parts.length > 0 ? parts.join(", ") : "unknown");
 }
 
 /**
@@ -341,6 +553,8 @@ function get_stats() {
 			document.getElementById("current_client_ip").innerHTML = a
 		}
 
+		update_radio_status(json_data);
+
 	}).catch(error => {
 		conn_status = 0
 		error.message;
@@ -369,6 +583,17 @@ function get_settings() {
 			}
 		}
 		set_telem_proto = document.getElementById("proto").value;
+		// A band value this GUI does not offer (e.g. from a newer firmware) leaves the select without a
+		// selected option and would be sent back as null on the next save - fall back to 2.4 GHz instead.
+		let band_sel = document.getElementById("wifi_band");
+		if (band_sel != null) {
+			band_sel.value = sanitize_wifi_band(band_sel.value);
+		}
+		let chan5_sel = document.getElementById("wifi_chan_5g");
+		if (chan5_sel != null && chan5_sel.value === "") {
+			chan5_sel.value = "36";  // value not offered by this GUI (e.g. a DFS channel) - fall back to the default
+		}
+		change_wifi_band_visibility();
 	}).catch(error => {
 		conn_status = 0
 		error.message;

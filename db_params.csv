@@ -10,6 +10,8 @@ udp_client_ip,data,string,
 wifi_hostname,data,string,DroneBridgeESP32
 esp32_mode,data,u8,1
 wifi_chan,data,u8,6
+wifi_band,data,u8,0
+wifi_chan_5g,data,u8,36
 wifi_en_gn,data,u8,1
 ant_use_ext,data,u8,0
 baud,data,i32,57600

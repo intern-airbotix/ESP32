@@ -101,43 +101,151 @@ static volatile TickType_t s_sta_disconnect_tick    = 0;     // tick latched on 
 
 esp_netif_t *esp_default_netif;
 
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+#define DB_WIFI_AP_CHANNEL_5G_DEFAULT 36    // fallback when wifi_chan_5g is not a usable AP channel
+
 /**
- * Configures the supported 2.4 GHz protocols for a Wi-Fi interface.
- * ESP32-C5 defaults to dual-band AUTO mode, where the legacy
- * esp_wifi_set_protocol() API is not supported.
+ * Validates the configured 5 GHz access point channel (db_param_wifi_chan_5g).
+ * Only the non-DFS channels can host an access point without radar detection, everything else
+ * (including the DFS range 52-144) falls back to the default channel 36. The settings write path
+ * already coerces the parameter, this is the safety net for values that pre-date that check in NVS.
  *
- * @param interface Wi-Fi interface to configure.
- * @param protocol_bitmap Bit mask of supported 2.4 GHz protocols.
- * @return ESP_OK on success, otherwise an ESP-IDF Wi-Fi error.
+ * @return The configured channel if it is a valid non-DFS access point channel, else 36.
  */
-static esp_err_t db_wifi_set_2g_protocols(wifi_interface_t interface, uint16_t protocol_bitmap) {
-#ifdef CONFIG_IDF_TARGET_ESP32C5
-    wifi_protocols_t protocols = {
-            .ghz_2g = protocol_bitmap,
-            .ghz_5g = 0,
-    };
-    return esp_wifi_set_protocols(interface, &protocols);
+static uint8_t db_wifi_ap_channel_5g(void) {
+    const uint8_t configured_channel = DB_PARAM_WIFI_CHAN_5G;
+    if (db_param_is_valid_ap_chan_5g(configured_channel)) {
+        return configured_channel;
+    }
+    ESP_LOGW(TAG, "wifi_chan_5g=%i is not a usable non-DFS 5 GHz access point channel - falling back to %i",
+             configured_channel, DB_WIFI_AP_CHANNEL_5G_DEFAULT);
+    return DB_WIFI_AP_CHANNEL_5G_DEFAULT;
+}
+#endif
+
+/**
+ * Maps the user configured wifi_band parameter onto the band mode that the given DroneBridge radio
+ * mode can actually use. LR and ESP-NOW are 2.4 GHz-only features and an access point must commit to
+ * a single band, so "auto" is only honoured in Wi-Fi client mode.
+ * Always returns WIFI_BAND_MODE_2G_ONLY on chips without a 5 GHz radio.
+ *
+ * @param radio_mode The active DroneBridge radio mode (see E_DB_WIFI_MODE).
+ * @return The band mode to configure the Wi-Fi driver with.
+ */
+static wifi_band_mode_t db_wifi_effective_band(const int radio_mode) {
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    const uint8_t requested_band = DB_PARAM_WIFI_BAND;
+    switch (radio_mode) {
+        case DB_WIFI_MODE_AP_LR:
+        case DB_WIFI_MODE_ESPNOW_AIR:
+        case DB_WIFI_MODE_ESPNOW_GND:
+            if (requested_band != DB_WIFI_BAND_2G4) {
+                ESP_LOGI(TAG, "wifi_band=%i ignored - LR and ESP-NOW are 2.4 GHz only features", requested_band);
+            }
+            return WIFI_BAND_MODE_2G_ONLY;
+        case DB_WIFI_MODE_STA:
+            if (requested_band == DB_WIFI_BAND_5G) return WIFI_BAND_MODE_5G_ONLY;
+            if (requested_band == DB_WIFI_BAND_AUTO) return WIFI_BAND_MODE_AUTO;
+            return WIFI_BAND_MODE_2G_ONLY;
+        default:    // access point modes (incl. the config AP opened in Bluetooth mode)
+            if (requested_band == DB_WIFI_BAND_5G) return WIFI_BAND_MODE_5G_ONLY;
+            if (requested_band == DB_WIFI_BAND_AUTO) {
+                ESP_LOGW(TAG, "wifi_band=2 (auto) is station-mode only - opening the access point on 2.4 GHz");
+            }
+            return WIFI_BAND_MODE_2G_ONLY;
+    }
 #else
-    return esp_wifi_set_protocol(interface, (uint8_t) protocol_bitmap);
+    (void) radio_mode;
+    return WIFI_BAND_MODE_2G_ONLY;
 #endif
 }
 
 /**
- * Restricts ESP32-C5 Wi-Fi to 2.4 GHz after the driver has started.
- * DroneBridge channel selection and LR mode currently use channels 1-13.
+ * Selects the Wi-Fi band the radio operates in. esp_wifi_set_band_mode() returns
+ * ESP_ERR_WIFI_NOT_STARTED before esp_wifi_start(), so this must be called after the driver has
+ * started. The band mode is persisted by the Wi-Fi driver, hence the idempotency check: re-applying
+ * the mode that is already active would needlessly restart the interface.
+ * No-op on chips without a 5 GHz radio - those are always on 2.4 GHz.
  *
- * @return ESP_OK on C5 success or on targets that do not need band selection.
+ * @param band_mode The band mode to apply, see db_wifi_effective_band().
+ * @return ESP_OK on success or on targets that do not need band selection.
  */
-static esp_err_t db_wifi_use_2g_band() {
-#ifdef CONFIG_IDF_TARGET_ESP32C5
+static esp_err_t db_wifi_apply_band(const wifi_band_mode_t band_mode) {
+#if CONFIG_SOC_WIFI_SUPPORT_5G
     wifi_band_mode_t current_band_mode = WIFI_BAND_MODE_AUTO;
-    if (esp_wifi_get_band_mode(&current_band_mode) == ESP_OK && current_band_mode == WIFI_BAND_MODE_2G_ONLY) {
-        return ESP_OK;  // already pinned to 2.4 GHz - changing it again would restart the interface
+    if (esp_wifi_get_band_mode(&current_band_mode) == ESP_OK && current_band_mode == band_mode) {
+        return ESP_OK;  // already in the requested band - changing it again would restart the interface
     }
-    return esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY);
+    return esp_wifi_set_band_mode(band_mode);
 #else
+    (void) band_mode;
     return ESP_OK;
 #endif
+}
+
+/**
+ * Configures the supported Wi-Fi protocols of an interface for the band the radio will operate in.
+ * Chips with a 5 GHz radio must use esp_wifi_set_protocols() since the legacy esp_wifi_set_protocol()
+ * is rejected while the driver is in dual-band AUTO mode (which is how a freshly flashed ESP32-C5 boots).
+ * The 5 GHz protocol bitmap is left unchanged (0) whenever the radio stays on 2.4 GHz.
+ *
+ * @param interface Wi-Fi interface to configure.
+ * @param protocol_bitmap_2g Bit mask of supported 2.4 GHz protocols.
+ * @param band_mode The band mode the interface will run in, see db_wifi_effective_band().
+ * @return ESP_OK on success, otherwise an ESP-IDF Wi-Fi error.
+ */
+static esp_err_t db_wifi_set_protocols_for_band(wifi_interface_t interface, uint16_t protocol_bitmap_2g,
+                                                const wifi_band_mode_t band_mode) {
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    wifi_protocols_t protocols = {
+            .ghz_2g = protocol_bitmap_2g,
+            .ghz_5g = (band_mode == WIFI_BAND_MODE_2G_ONLY)
+                              ? 0
+                              : (WIFI_PROTOCOL_11A | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AC | WIFI_PROTOCOL_11AX),
+    };
+    return esp_wifi_set_protocols(interface, &protocols);
+#else
+    (void) band_mode;
+    return esp_wifi_set_protocol(interface, (uint8_t) protocol_bitmap_2g);
+#endif
+}
+
+/**
+ * Human readable name of a Wi-Fi band mode for logging.
+ *
+ * @param band_mode The band mode to describe.
+ * @return A static string describing the band.
+ */
+static const char *db_wifi_band_name(const wifi_band_mode_t band_mode) {
+    switch (band_mode) {
+        case WIFI_BAND_MODE_5G_ONLY:
+            return "5 GHz";
+        case WIFI_BAND_MODE_AUTO:
+            return "2.4 GHz + 5 GHz";
+        default:
+            return "2.4 GHz";
+    }
+}
+
+/**
+ * The 2.4 GHz protocol bitmap the Wi-Fi client mode uses, derived from the wifi_en_gn parameter.
+ * Kept in one place because the bitmap must be applied twice: once before esp_wifi_start() and again
+ * after the band was switched, since esp_wifi_set_protocols() silently skips the 2.4 GHz bitmap while
+ * the driver is in 5 GHz only mode (and the 5 GHz one while it is in 2.4 GHz only mode).
+ * LR is always offered - it is a 2.4 GHz only feature and simply unused on 5 GHz.
+ *
+ * @return Bit mask of the 2.4 GHz protocols the station interface should support.
+ */
+static uint16_t db_wifi_sta_protocol_bitmap_2g(void) {
+    if (DB_PARAM_WIFI_EN_GN) {
+        // only makes sense if the AP can not do proper N or you do not need range or want Wi-Fi 6 ax support
+#if defined(CONFIG_IDF_TARGET_ESP32C5) || defined(CONFIG_IDF_TARGET_ESP32C6)
+        return WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AX | WIFI_PROTOCOL_LR;
+#else
+        return WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR;
+#endif
+    }
+    return WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR;    // range for sure
 }
 
 static esp_err_t db_set_dns_server(esp_netif_t *netif, uint32_t addr, esp_netif_dns_type_t type) {
@@ -228,12 +336,23 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
             return;
         }
         ESP_LOGI(TAG, "WIFI_EVENT_STA_START - Wifi Started");
-        esp_err_t band_err = db_wifi_use_2g_band();
+        const wifi_band_mode_t sta_band = db_wifi_effective_band(DB_WIFI_MODE_STA);
+        esp_err_t band_err = db_wifi_apply_band(sta_band);
         if (band_err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to select the 2.4 GHz Wi-Fi band: %s", esp_err_to_name(band_err));
+            ESP_LOGE(TAG, "Failed to select the %s Wi-Fi band: %s", db_wifi_band_name(sta_band),
+                     esp_err_to_name(band_err));
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
             return;
         }
+        /* The protocol bitmaps configured in db_init_wifi_clientmode() were applied while the driver
+           was still in the band mode persisted from the last boot, and esp_wifi_set_protocols() skips
+           the bitmap of the band it is not in. Re-issue them now that the target band is active.
+           Switching the band restarts the STA interface and raises a second WIFI_EVENT_STA_START;
+           db_wifi_apply_band() is then a no-op and this call simply re-applies the same bitmap. */
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+        ESP_ERROR_CHECK_WITHOUT_ABORT(
+                db_wifi_set_protocols_for_band(WIFI_IF_STA, db_wifi_sta_protocol_bitmap_2g(), sta_band));
+#endif
         if (!DB_RADIO_IS_OFF) {  // maybe the other task did set it in the meantime
             ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
         } else {
@@ -349,21 +468,65 @@ esp_err_t init_fs(void) {
 
 /**
  * Configures and starts the AP after mode/netif are set up.
- * Shared between initial AP init and STA->AP fallback.
+ * Shared between initial AP init and STA->AP fallback. Decides the effective band and channel of the
+ * access point from the wifi_band/wifi_chan/wifi_chan_5g parameters - the caller does not set
+ * wifi_config->ap.channel.
+ *
+ * @param wifi_config The AP configuration (SSID/password); its channel field is filled in here.
+ * @param wifi_mode The DroneBridge radio mode the AP is started for (AP or AP_LR).
  */
 static void db_ap_setup_and_start(wifi_config_t *wifi_config, int wifi_mode) {
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    const wifi_band_mode_t desired_band = db_wifi_effective_band(wifi_mode);
+    uint16_t protocol_bitmap_2g;
     if (wifi_mode == DB_WIFI_MODE_AP_LR) {
         ESP_LOGI(TAG, "Enabling LR Mode on access point. This device will be invisible to non-ESP32 devices!");
-        ESP_ERROR_CHECK(db_wifi_set_2g_protocols(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));
+        protocol_bitmap_2g = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR;
     } else {
         // Enable 11b/g/n so modern clients negotiate up to ~72 Mbps instead of being
         // pinned to 11b CCK (1-11 Mbps). The slow link was the underlying reason the
         // web GUI's polls were timing out >1 s and tripping the AbortController.
-        ESP_ERROR_CHECK(db_wifi_set_2g_protocols(WIFI_IF_AP,
-                WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N));
+        protocol_bitmap_2g = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
     }
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, wifi_config));
+    uint8_t ap_channel = DB_PARAM_CHANNEL;
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    if (desired_band == WIFI_BAND_MODE_5G_ONLY) {
+        ap_channel = db_wifi_ap_channel_5g();
+    }
+#endif
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    // A rejected 5 GHz protocol request must not abort: the post-start re-issue and the 2.4 GHz fallback recover.
+    esp_err_t ap_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(db_wifi_set_protocols_for_band(WIFI_IF_AP, protocol_bitmap_2g, desired_band));
+
+    /* esp_wifi_set_config() rejects a channel that is invalid for the band mode the driver is
+       currently in (the driver persists the band mode in NVS, so a reboot starts in the band that was
+       used last), while esp_wifi_set_band_mode() only works after esp_wifi_start(). So configure a
+       placeholder channel that is valid for the current band first, and re-apply the real channel
+       after the band has been switched below. */
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    wifi_band_mode_t started_band = desired_band;   // band mode the driver is in before esp_wifi_start()
+    if (esp_wifi_get_band_mode(&started_band) != ESP_OK) {
+        started_band = desired_band;    // unknown - assume no switch is needed and let the config decide
+    }
+    if (started_band == desired_band || started_band == WIFI_BAND_MODE_AUTO) {
+        wifi_config->ap.channel = ap_channel;   // the real channel is valid in the current band mode
+    } else {
+        wifi_config->ap.channel = (started_band == WIFI_BAND_MODE_5G_ONLY) ? DB_WIFI_AP_CHANNEL_5G_DEFAULT : 1;
+        ESP_LOGI(TAG, "Wi-Fi driver still in %s mode - using placeholder channel %i until the band is switched",
+                 db_wifi_band_name(started_band), wifi_config->ap.channel);
+    }
+#else
+    wifi_config->ap.channel = ap_channel;
+#endif
+    /* From here on nothing may abort: an unusable band/channel combination is a user setting made via
+       the web interface and must not turn into a boot loop. Errors are collected and answered with a
+       2.4 GHz fallback below - the configuration access point has to come up either way. */
+    esp_err_t config_err = ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_config(WIFI_IF_AP, wifi_config));
+    if (config_err != ESP_OK) {
+        ap_setup_err = config_err;
+    }
+    /* wifi_5g_channel_mask stays 0, which means "5 GHz channels are allowed according to local
+       regulatory rules" (see wifi_country_t in esp_wifi_types_generic.h). The access point channel is
+       additionally restricted to the non-DFS list by db_wifi_ap_channel_5g(). */
     wifi_country_t wifi_country = {.cc = "US", .schan = 1, .nchan = 13, .policy = WIFI_COUNTRY_POLICY_MANUAL};
     ESP_ERROR_CHECK(esp_wifi_set_country(&wifi_country));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
@@ -371,7 +534,44 @@ static void db_ap_setup_and_start(wifi_config_t *wifi_config, int wifi_mode) {
     /* Start WiFi first — creates lwIP netif, DHCP auto-starts on default IP
        (only when dhcps_status == INIT). Then stop DHCP, set custom IP, restart. */
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(db_wifi_use_2g_band());
+    if (ap_setup_err == ESP_OK) {
+        ap_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(db_wifi_apply_band(desired_band));
+    }
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    if (ap_setup_err == ESP_OK) {
+        /* esp_wifi_set_protocols() does not touch the 5 GHz bitmap while the driver is in 2.4 GHz only
+           mode and not the 2.4 GHz bitmap while it is in 5 GHz only mode, so the bitmap configured
+           before the switch was dropped. Re-issue it now that the target band is active. */
+        ap_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(
+                db_wifi_set_protocols_for_band(WIFI_IF_AP, protocol_bitmap_2g, desired_band));
+    }
+    if (ap_setup_err == ESP_OK && started_band != desired_band) {
+        // band switched - now that the target band is active the real channel can be applied
+        wifi_config->ap.channel = ap_channel;
+        ap_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_config(WIFI_IF_AP, wifi_config));
+    }
+    if (ap_setup_err != ESP_OK) {
+        ESP_LOGE(TAG, "Could not open the access point on %s channel %i: %s", db_wifi_band_name(desired_band),
+                 ap_channel, esp_err_to_name(ap_setup_err));
+        ESP_LOGW(TAG, "Falling back to a 2.4 GHz access point on channel %i", DB_PARAM_CHANNEL);
+        ESP_ERROR_CHECK_WITHOUT_ABORT(db_wifi_apply_band(WIFI_BAND_MODE_2G_ONLY));
+        ESP_ERROR_CHECK_WITHOUT_ABORT(
+                db_wifi_set_protocols_for_band(WIFI_IF_AP, protocol_bitmap_2g, WIFI_BAND_MODE_2G_ONLY));
+        wifi_config->ap.channel = DB_PARAM_CHANNEL;
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_config(WIFI_IF_AP, wifi_config));
+    }
+    wifi_band_mode_t active_band = desired_band;
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_get_band_mode(&active_band));
+#else
+    if (ap_setup_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to apply the access point configuration: %s", esp_err_to_name(ap_setup_err));
+    }
+    const wifi_band_mode_t active_band = desired_band;
+#endif
+    uint8_t active_channel = 0;
+    wifi_second_chan_t active_second_channel = WIFI_SECOND_CHAN_NONE;
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_get_channel(&active_channel, &active_second_channel));
+    ESP_LOGI(TAG, "AP running on %s channel %i", db_wifi_band_name(active_band), active_channel);
     ESP_ERROR_CHECK(esp_netif_dhcps_stop(esp_default_netif));
     esp_netif_ip_info_t ip;
     memset(&ip, 0, sizeof(esp_netif_ip_info_t));
@@ -421,7 +621,7 @@ void db_init_wifi_apmode(int wifi_mode) {
                     .password = "dronebridge",
                     .ssid_len = 0,
                     .authmode = WIFI_AUTH_WPA2_PSK,
-                    .channel = db_param_channel.value.db_param_u8.value,
+                    // .channel is band dependent and assigned by db_ap_setup_and_start()
                     .ssid_hidden = 0,
                     .beacon_interval = 100,
                     .max_connection = 10
@@ -502,17 +702,11 @@ int db_init_wifi_clientmode() {
 #pragma GCC diagnostic pop
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    if (DB_PARAM_WIFI_EN_GN) {
-        // only makes sense if the AP can not do proper N or you do not need range or want Wi-Fi 6 ax support
-#if defined(CONFIG_IDF_TARGET_ESP32C5) || defined(CONFIG_IDF_TARGET_ESP32C6)
-        ESP_ERROR_CHECK(db_wifi_set_2g_protocols(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AX | WIFI_PROTOCOL_LR));
-#else
-        ESP_ERROR_CHECK(db_wifi_set_2g_protocols(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N |
-                                                           WIFI_PROTOCOL_LR));
-#endif
-    } else {
-        ESP_ERROR_CHECK(db_wifi_set_2g_protocols(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));  // range for sure
-    }
+    // The band mode itself can only be selected once the driver is started (WIFI_EVENT_STA_START), but the
+    // protocols of both bands must be configured before that. The WIFI_EVENT_STA_START handler re-issues
+    // the bitmap for the band that ends up being active.
+    const wifi_band_mode_t sta_band = db_wifi_effective_band(DB_WIFI_MODE_STA);
+    ESP_ERROR_CHECK(db_wifi_set_protocols_for_band(WIFI_IF_STA, db_wifi_sta_protocol_bitmap_2g(), sta_band));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE)); // disable power saving
     ESP_ERROR_CHECK(esp_wifi_start());
@@ -572,7 +766,7 @@ static void db_start_ap_fallback(void) {
                     .password = "",
                     .ssid_len = 0,
                     .authmode = WIFI_AUTH_WPA2_PSK,
-                    .channel = db_param_channel.value.db_param_u8.value,
+                    // .channel is band dependent and assigned by db_ap_setup_and_start()
                     .ssid_hidden = 0,
                     .beacon_interval = 100,
                     .max_connection = 10,
@@ -637,9 +831,12 @@ void db_init_wifi_espnow() {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(db_wifi_use_2g_band());
-    ESP_ERROR_CHECK(esp_wifi_set_channel(DB_PARAM_CHANNEL, WIFI_SECOND_CHAN_NONE));
-    ESP_ERROR_CHECK(db_wifi_set_2g_protocols(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));
+    // ESP-NOW always runs on 2.4 GHz - LR mode and the channel parameter are 2.4 GHz only
+    const wifi_band_mode_t espnow_band = db_wifi_effective_band(DB_PARAM_RADIO_MODE);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(db_wifi_apply_band(espnow_band));
+    // Never abort here: ESP-NOW modes have no web interface to undo a bad setting.
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_channel(DB_PARAM_CHANNEL, WIFI_SECOND_CHAN_NONE));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(db_wifi_set_protocols_for_band(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR, espnow_band));
     ESP_LOGI(TAG, "Enabled ESP-NOW WiFi Mode! LR Mode is set. This device will be invisible to non-ESP32 devices!");
     ESP_ERROR_CHECK(esp_read_mac(LOCAL_MAC_ADDRESS, ESP_MAC_WIFI_STA));
 }
@@ -775,7 +972,9 @@ void db_read_settings_nvs() {
 
 /**
  * Callback for a short press (<CONFIG_BUTTON_SHORT_PRESS_TIME_MS) of the reset/boot button.
- * Sets mode to WiFi access point mode with default password "dronebridge" so user can check/change the config
+ * Sets mode to WiFi access point mode with default password "dronebridge" so user can check/change the config.
+ * The band is reset as well so the recovery access point is always a 2.4 GHz one - a 5 GHz only AP would be
+ * invisible to a laptop or phone without a 5 GHz radio, which defeats the purpose of the recovery button.
  * @param arg
  */
 void short_press_callback(void *arg, void *usr_data) {
@@ -783,6 +982,7 @@ void short_press_callback(void *arg, void *usr_data) {
     DB_RADIO_MODE_DESIGNATED = DB_WIFI_MODE_AP;  // Do not directly change DB_PARAM_RADIO_MODE since it is not safe and constantly processed by other tasks. Save settings and reboot will assign DB_RADIO_MODE_DESIGNATED to DB_PARAM_RADIO_MODE.
     db_param_set_to_default(&db_param_ssid);
     db_param_set_to_default(&db_param_pass);
+    db_param_set_to_default(&db_param_wifi_band);
     db_write_settings_to_nvs();
     esp_restart();
 }
@@ -864,6 +1064,13 @@ void app_main() {
     }
     ESP_ERROR_CHECK(ret);
     db_read_settings_nvs();
+#if !CONFIG_SOC_WIFI_SUPPORT_5G
+    if (DB_PARAM_WIFI_BAND != DB_WIFI_BAND_2G4) {
+        // the parameter is accepted and stored on every chip so a config can be shared across a mixed fleet
+        ESP_LOGW(TAG, "wifi_band=%i is set but this chip has no 5 GHz radio - staying on 2.4 GHz",
+                 DB_PARAM_WIFI_BAND);
+    }
+#endif
     DB_RADIO_MODE_DESIGNATED = DB_PARAM_RADIO_MODE; // must always match, mismatch only allowed when changed by user action and not rebooted, yet.
     set_reset_trigger();
     db_configure_antenna();

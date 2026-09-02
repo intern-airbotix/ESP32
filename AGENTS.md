@@ -10,7 +10,7 @@ The web-interface (frontend) is compiled to a single file with everything includ
 
 # Limits
 Do not implement OTA Updates.
-ESP32-C5 support is 2.4 GHz only: do not add 5 GHz channel selection without extending the channel parameter validation and the web-interface.
+ESP32-C5 supports both bands. The `wifi_band` parameter (0 = 2.4 GHz, 1 = 5 GHz, 2 = auto/station-only) selects the band and `wifi_chan_5g` the 5 GHz access point channel (non-DFS channels 36/40/44/48/149/153/157/161/165 only). All 5 GHz code is guarded with `#if CONFIG_SOC_WIFI_SUPPORT_5G`; on chips without a 5 GHz radio the parameters are stored but ignored. LR and ESP-NOW modes stay 2.4 GHz only.
 Keep the non-C5 targets building with esp-idf 5.4.x; only the C5 build uses esp-idf 5.5.x.
 Do not add features specifically required for drone light shows.
 

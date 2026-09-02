@@ -96,6 +96,55 @@ db_parameter_t db_param_channel = {
 };
 
 /**
+ * Wi-Fi band the radio operates in. See E_DB_WIFI_BAND: 0 = 2.4 GHz only, 1 = 5 GHz only,
+ * 2 = auto (2.4 GHz + 5 GHz, station mode only - an access point must commit to one band).
+ * Only acted upon on chips with a 5 GHz radio (CONFIG_SOC_WIFI_SUPPORT_5G, e.g. the ESP32-C5);
+ * on every other chip the value is accepted and stored but the radio stays on 2.4 GHz.
+ * LR and ESP-NOW modes are 2.4 GHz-only features and ignore this parameter.
+ */
+db_parameter_t db_param_wifi_band = {
+        .db_name = "wifi_band",
+        .type = UINT8,
+        .mav_t = {
+                .param_name = "WIFI_BAND",
+                .param_index = 18,
+                .param_type = MAV_PARAM_TYPE_UINT8,
+        },
+        .value = {
+                .db_param_u8 = {
+                        .value = DB_WIFI_BAND_2G4,
+                        .default_value = DB_WIFI_BAND_2G4,
+                        .min = DB_WIFI_BAND_2G4,
+                        .max = DB_WIFI_BAND_AUTO,
+                }
+        }
+};
+
+/**
+ * Radio channel used when the ESP32 opens a 5 GHz access point (wifi_band = 1).
+ * Only the non-DFS channels 36, 40, 44, 48, 149, 153, 157, 161 and 165 are usable - any other value
+ * inside the min/max range is coerced to channel 36 on write (see db_param_is_valid_assign_u8()) and
+ * again when the access point is started, which also catches values stored by an older firmware.
+ */
+db_parameter_t db_param_wifi_chan_5g = {
+        .db_name = "wifi_chan_5g",
+        .type = UINT8,
+        .mav_t = {
+                .param_name = "WIFI_AP_CHAN_5G",
+                .param_index = 19,
+                .param_type = MAV_PARAM_TYPE_UINT8,
+        },
+        .value = {
+                .db_param_u8 = {
+                        .value = 36,
+                        .default_value = 36,
+                        .min = 36,
+                        .max = 165,
+                }
+        }
+};
+
+/**
  *  Allow the usage of 802.11bgn mode
  *  disabled: only 802.11b support for client mode - set to true: 802.11b/g/n/ax mode support.
  *  ax only when chip supports it.
@@ -540,6 +589,8 @@ void db_param_init_parameters() {
             &db_param_wifi_hostname,
             &db_param_radio_mode,
             &db_param_channel,
+            &db_param_wifi_band,
+            &db_param_wifi_chan_5g,
             &db_param_wifi_en_gn,
             &db_param_radio_ant_ext,
             &db_param_baud,
@@ -903,6 +954,21 @@ bool db_param_is_valid_str(char *new_string_value, db_parameter_t *target_param)
 };
 
 /**
+ * Checks whether a 5 GHz channel number can host an access point.
+ * Only the non-DFS channels 36, 40, 44, 48, 149, 153, 157, 161 and 165 can - the DFS range 52-144
+ * requires radar detection, which this firmware does not implement.
+ * @param channel The 5 GHz channel number to check
+ * @return true if the channel is a usable non-DFS access point channel
+ */
+bool db_param_is_valid_ap_chan_5g(const uint8_t channel) {
+    static const uint8_t valid_ap_channels[] = {36, 40, 44, 48, 149, 153, 157, 161, 165};
+    for (size_t i = 0; i < sizeof(valid_ap_channels) / sizeof(valid_ap_channels[0]); i++) {
+        if (valid_ap_channels[i] == channel) return true;
+    }
+    return false;
+}
+
+/**
  * Checks if uint8 is valid for assignment to the target_param.
  * @param new_u8_value The u8 to be set as value
  * @param target_param The target parameter
@@ -971,6 +1037,13 @@ bool db_param_is_valid_assign_u8(const uint8_t new_u8_value, db_parameter_t *tar
             // Special case check: Do not directly change DB_WIFI_MODE since it is not safe and constantly
             // processed by other tasks. Save settings and reboot will assign DB_RADIO_MODE_DESIGNATED to DB_WIFI_MODE
             DB_RADIO_MODE_DESIGNATED = new_u8_value;
+        } else if (strcmp((char *) target_param->db_name, (char *) db_param_wifi_chan_5g.db_name) == 0 &&
+                   !db_param_is_valid_ap_chan_5g(new_u8_value)) {
+            // Special case check: the min/max range 36-165 also contains the DFS channels, which can not host an
+            // access point. Coerce to the default so what is stored is what the access point will actually use.
+            ESP_LOGW(TAG, "wifi_chan_5g=%i is not a usable non-DFS 5 GHz access point channel - storing %i instead",
+                     new_u8_value, target_param->value.db_param_u8.default_value);
+            target_param->value.db_param_u8.value = target_param->value.db_param_u8.default_value;
         } else {
             target_param->value.db_param_u8.value = new_u8_value; // accept value and assign
         }

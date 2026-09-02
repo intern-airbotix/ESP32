@@ -38,6 +38,10 @@
                 </div>
             </div>
             <div class="row">
+                <div id="radio_status" class="twelve columns small_text">
+                </div>
+            </div>
+            <div class="row">
                 <div class="four columns">
                     <label>received bytes serial port</label>
                     <div id="read_bytes">-</div>
@@ -111,6 +115,17 @@
                     </div>
                 </div>
             </div>
+            <div class="row" id="wifi_band_div" style="display: none">
+                <div class="six columns">
+                    <label for="wifi_band">Wi-Fi band</label>
+                    <select id="wifi_band" name="wifi_band" form="settings_form" onchange="change_wifi_band_visibility()">
+                        <option value="0">2.4 GHz</option>
+                        <option value="1">5 GHz</option>
+                        <option value="2" id="wifi_band_auto_opt">Auto (2.4 + 5 GHz, client mode only)</option>
+                    </select>
+                    <div class="hint" id="wifi_band_hint" style="display: none"></div>
+                </div>
+            </div>
             <div class="row">
                 <div id="ap_channel_div" class="six columns">
                     <label for="wifi_chan">Channel</label>
@@ -128,6 +143,21 @@
                         <option value="11">11</option>
                         <option value="12">12</option>
                         <option value="13">13</option>
+                    </select>
+                </div>
+                <div class="six columns" id="wifi_chan_5g_div" style="display: none">
+                    <label for="wifi_chan_5g">Channel (5 GHz)</label>
+                    <select id="wifi_chan_5g" name="wifi_chan_5g" form="settings_form"
+                            onchange="change_wifi_band_visibility()">
+                        <option value="36">36</option>
+                        <option value="40">40</option>
+                        <option value="44">44</option>
+                        <option value="48">48</option>
+                        <option value="149">149</option>
+                        <option value="153">153</option>
+                        <option value="157">157</option>
+                        <option value="161">161</option>
+                        <option value="165">165</option>
                     </select>
                 </div>
                 <div class="six columns" id="ap_ip_div">

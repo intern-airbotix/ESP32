@@ -75,6 +75,21 @@ input, select {
     font-size: small
 }
 
+/* short inline explanation below an input, e.g. why the Wi-Fi band cannot be changed */
+.hint {
+    font-size: small;
+    color: #ff9734;
+    margin-top: -0.75rem;
+    margin-bottom: 1rem;
+}
+
+/* select that must not be changed by the user but still has to be submitted with the form.
+   Not using the disabled attribute so the value stays part of the settings POST. */
+select.locked_input {
+    pointer-events: none;
+    opacity: 0.6;
+}
+
 .img_button:hover {
     cursor: pointer;
     filter: invert(60%) sepia(100%) saturate(509%) hue-rotate(334deg) brightness(101%) contrast(101%);

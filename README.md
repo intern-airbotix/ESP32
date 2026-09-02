@@ -44,7 +44,7 @@ match a stock Skybrush server, or keep the server's `broadcast_port` override - 
 
 ### ESP32-C5 (Seeed Studio XIAO ESP32-C5) - branch `c-5-integration`
 
-The fork also builds for the ESP32-C5 (2.4 GHz only, no 5 GHz). It needs ESP-IDF 5.5.2 or newer,
+The fork also builds for the ESP32-C5, which has a dual-band radio. It needs ESP-IDF 5.5.2 or newer,
 so it has its own build script and sdkconfig, see [ESP32-C5.md](ESP32-C5.md):
 
 ```bash
@@ -57,6 +57,13 @@ FC TX -> XIAO D7 (GPIO12, set as `gpio_rx`), FC RX <- XIAO D6 (GPIO11, set as `g
 The console is on the USB port, so those header pins are free for the FC. Tested: STA mode (join,
 discovery broadcast, unicast, TCP 5760, PARAM round trip), AP fallback after 80 s, AP mode telemetry.
 Test helpers are in `tools/c5-test/`.
+
+The band is selectable in the web GUI / REST API: `wifi_band` (0 = 2.4 GHz, 1 = 5 GHz, 2 = auto -
+station mode only) and `wifi_chan_5g` (channel of the configuration / fallback access point, non-DFS
+channels 36/40/44/48/149/153/157/161/165 only). The fork has no plain AP mode - that access point is
+the one opened after the 80 s STA fallback and alongside Bluetooth LE mode, and it honours `wifi_band`
+in both cases. LR and ESP-NOW modes stay on 2.4 GHz. On chips without a 5 GHz radio the parameters are
+stored but ignored. See [ESP32-C5.md](ESP32-C5.md) for the details.
 
 Unlike mavesp8266 there is no MAVLink parameter interface on component 240 (QGC's WiFi-Bridge
 settings page) - configuration is via the web GUI / REST API.

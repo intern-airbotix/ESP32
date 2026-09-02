@@ -24,6 +24,7 @@
 #include <fcntl.h>
 #include <lwip/sockets.h>
 #include <esp_chip_info.h>
+#include <esp_wifi.h>
 #include "esp_http_server.h"
 #include "esp_system.h"
 #include "esp_log.h"
@@ -318,11 +319,44 @@ static esp_err_t system_info_get_handler(httpd_req_t *req) {
 #else
     cJSON_AddNumberToObject(root, "serial_via_JTAG", 0);
 #endif
+    // tells the web interface whether the wifi_band/wifi_chan_5g parameters have any effect on this chip
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    cJSON_AddNumberToObject(root, "wifi_5ghz", 1);
+#else
+    cJSON_AddNumberToObject(root, "wifi_5ghz", 0);
+#endif
     const char *sys_info = cJSON_Print(root);
     db_http_resp_sendstr_with_retry(req, sys_info);
     free((void *) sys_info);
     cJSON_Delete(root);
     return ESP_OK;
+}
+
+/**
+ * Reports the Wi-Fi band the radio is currently operating in. Never aborts - any driver error is
+ * reported as "unknown" so a stats poll can not take the web server down.
+ * @return 1 = 2.4 GHz, 2 = 5 GHz, 3 = 2.4 GHz + 5 GHz (auto), 0 = unknown or radio switched off
+ */
+static uint8_t db_http_get_wifi_band_mode(void) {
+    if (DB_RADIO_IS_OFF) return 0;  // radio was switched off (e.g. because the autopilot reported armed)
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    wifi_band_mode_t band_mode = WIFI_BAND_MODE_AUTO;
+    if (esp_wifi_get_band_mode(&band_mode) != ESP_OK) return 0;
+    return (uint8_t) band_mode;
+#else
+    return 1;   // chip has no 5 GHz radio and the Wi-Fi is up - it can only be 2.4 GHz
+#endif
+}
+
+/**
+ * Reports the primary Wi-Fi channel the radio currently uses. Never aborts.
+ * @return The primary channel number or 0 if it could not be determined
+ */
+static uint8_t db_http_get_wifi_channel(void) {
+    uint8_t primary_channel = 0;
+    wifi_second_chan_t second_channel = WIFI_SECOND_CHAN_NONE;
+    if (esp_wifi_get_channel(&primary_channel, &second_channel) != ESP_OK) return 0;
+    return primary_channel;
 }
 
 /**
@@ -338,6 +372,8 @@ static esp_err_t system_stats_get_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "serial_dec_mav_msgs", serial_total_decoded_mav_msgs);
     cJSON_AddNumberToObject(root, "tcp_connected", num_connected_tcp_clients);
     cJSON_AddNumberToObject(root, "udp_connected", udp_conn_list->size);
+    cJSON_AddNumberToObject(root, "wifi_band_mode", db_http_get_wifi_band_mode());
+    cJSON_AddNumberToObject(root, "wifi_channel", db_http_get_wifi_channel());
     // add IP:PORT info on connected UDP clients
     cJSON *udp_clients = cJSON_CreateArray();
     for (int i = 0; i < udp_conn_list->size; i++) {

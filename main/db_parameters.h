@@ -34,8 +34,8 @@
 #define DB_MATURITY_VERSION "stable"
 #define DB_TYPE_VERSION 255 // FIRMWARE_VERSION_TYPE_OFFICIAL -> https://mavlink.io/en/messages/common.html#FIRMWARE_VERSION_TYPE
 
-#define DB_PARAM_TOTAL_NUM          28  // total number of db parameters
-#define DB_PARAM_MAV_CNT            18  // Number of MAVLink parameters returned by ESP32 in the PARAM message. Needed by GCS.
+#define DB_PARAM_TOTAL_NUM          30  // total number of db parameters
+#define DB_PARAM_MAV_CNT            20  // Number of MAVLink parameters returned by ESP32 in the PARAM message. Needed by GCS.
 
 #define DB_PARAM_NAME_MAXLEN        16      // max len of a parameter/key stored in the ESP32 NVM
 #define DB_PARAM_MAX_MAV_PARAM_NAME_LEN 16  // max len of the field used to store the mav param name (max len 16 by def.)
@@ -80,6 +80,8 @@
 #define DB_PARAM_STA_SSID (char *) db_param_sta_ssid.value.db_param_str.value // STA SSID
 #define DB_PARAM_STA_PASS (char *) db_param_sta_pass.value.db_param_str.value  // STA password
 #define DB_PARAM_CHANNEL db_param_channel.value.db_param_u8.value
+#define DB_PARAM_WIFI_BAND db_param_wifi_band.value.db_param_u8.value        // see E_DB_WIFI_BAND
+#define DB_PARAM_WIFI_CHAN_5G db_param_wifi_chan_5g.value.db_param_u8.value  // 5 GHz access point channel
 #define DB_PARAM_RADIO_MODE db_param_radio_mode.value.db_param_u8.value
 #define DB_PARAM_STA_IP db_param_wifi_sta_ip.value.db_param_str.value
 #define DB_PARAM_STA_GW db_param_wifi_sta_gw.value.db_param_str.value
@@ -106,6 +108,18 @@ enum E_DB_WIFI_MODE {
   DB_WIFI_MODE_ESPNOW_GND = 5, // ESP-NOW Mode for GND station
   DB_BLUETOOTH_MODE       = 6, // Bluetooth BLE mode
   DB_WIFI_MODE_END        = 7, // End of enum
+};
+
+/**
+ * Value range of the wifi_band parameter. Only chips with a 5 GHz radio (CONFIG_SOC_WIFI_SUPPORT_5G,
+ * e.g. the ESP32-C5) act on anything but DB_WIFI_BAND_2G4 - on all other chips the parameter is
+ * stored but ignored.
+ */
+enum E_DB_WIFI_BAND {
+  DB_WIFI_BAND_2G4  = 0, // 2.4 GHz only - the default and the only band the other chips support
+  DB_WIFI_BAND_5G   = 1, // 5 GHz only
+  DB_WIFI_BAND_AUTO = 2, // 2.4 GHz + 5 GHz - station mode only, an access point must pick one band
+  DB_WIFI_BAND_END  = 3, // End of enum
 };
 
 enum E_DB_SERIAL_PROTOCOL {
@@ -180,6 +194,8 @@ extern db_parameter_t db_param_udp_client_ip;
 extern db_parameter_t db_param_wifi_hostname;
 extern db_parameter_t db_param_radio_mode;
 extern db_parameter_t db_param_channel;
+extern db_parameter_t db_param_wifi_band;
+extern db_parameter_t db_param_wifi_chan_5g;
 extern db_parameter_t db_param_wifi_en_gn;
 extern db_parameter_t db_param_radio_ant_ext;
 extern db_parameter_t db_param_baud;
@@ -207,6 +223,7 @@ void db_param_read_all_params_json(const cJSON *root_obj);
 void db_param_write_all_params_json(cJSON *root_obj);
 
 bool db_param_is_valid_str(char *new_string_value, db_parameter_t *target_param);
+bool db_param_is_valid_ap_chan_5g(uint8_t channel);
 bool db_param_is_valid_u8(uint8_t new_u8_value, db_parameter_t *target_param);
 bool db_param_is_valid_u16(uint16_t new_u16_value, db_parameter_t *target_param);
 bool db_param_is_valid_i32(int32_t new_i32_value, db_parameter_t *target_param);
