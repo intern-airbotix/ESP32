@@ -28,6 +28,7 @@
 #include "esp_mac.h"
 #include "esp_wifi.h"
 #include "esp_wifi_types.h"
+#include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_event.h"
 #include "db_esp32_control.h"
@@ -54,6 +55,10 @@
 
 #include "db_ble.h"
 
+#endif
+
+#if defined(CONFIG_IDF_TARGET_ESP32C5) && ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 5, 2)
+#error "Production ESP32-C5 modules require ESP-IDF 5.5.2 or newer"
 #endif
 
 #define NVS_NAMESPACE "settings"
@@ -95,6 +100,45 @@ static volatile TickType_t s_sta_disconnect_tick    = 0;     // tick latched on 
 #define WIFI_STA_CONNECT_TIMEOUT_MS 80000   //<- edit here for fallback time
 
 esp_netif_t *esp_default_netif;
+
+/**
+ * Configures the supported 2.4 GHz protocols for a Wi-Fi interface.
+ * ESP32-C5 defaults to dual-band AUTO mode, where the legacy
+ * esp_wifi_set_protocol() API is not supported.
+ *
+ * @param interface Wi-Fi interface to configure.
+ * @param protocol_bitmap Bit mask of supported 2.4 GHz protocols.
+ * @return ESP_OK on success, otherwise an ESP-IDF Wi-Fi error.
+ */
+static esp_err_t db_wifi_set_2g_protocols(wifi_interface_t interface, uint16_t protocol_bitmap) {
+#ifdef CONFIG_IDF_TARGET_ESP32C5
+    wifi_protocols_t protocols = {
+            .ghz_2g = protocol_bitmap,
+            .ghz_5g = 0,
+    };
+    return esp_wifi_set_protocols(interface, &protocols);
+#else
+    return esp_wifi_set_protocol(interface, (uint8_t) protocol_bitmap);
+#endif
+}
+
+/**
+ * Restricts ESP32-C5 Wi-Fi to 2.4 GHz after the driver has started.
+ * DroneBridge channel selection and LR mode currently use channels 1-13.
+ *
+ * @return ESP_OK on C5 success or on targets that do not need band selection.
+ */
+static esp_err_t db_wifi_use_2g_band() {
+#ifdef CONFIG_IDF_TARGET_ESP32C5
+    wifi_band_mode_t current_band_mode = WIFI_BAND_MODE_AUTO;
+    if (esp_wifi_get_band_mode(&current_band_mode) == ESP_OK && current_band_mode == WIFI_BAND_MODE_2G_ONLY) {
+        return ESP_OK;  // already pinned to 2.4 GHz - changing it again would restart the interface
+    }
+    return esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY);
+#else
+    return ESP_OK;
+#endif
+}
 
 static esp_err_t db_set_dns_server(esp_netif_t *netif, uint32_t addr, esp_netif_dns_type_t type) {
     if (addr && (addr != IPADDR_NONE)) {
@@ -184,6 +228,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
             return;
         }
         ESP_LOGI(TAG, "WIFI_EVENT_STA_START - Wifi Started");
+        esp_err_t band_err = db_wifi_use_2g_band();
+        if (band_err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to select the 2.4 GHz Wi-Fi band: %s", esp_err_to_name(band_err));
+            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+            return;
+        }
         if (!DB_RADIO_IS_OFF) {  // maybe the other task did set it in the meantime
             ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
         } else {
@@ -305,12 +355,12 @@ static void db_ap_setup_and_start(wifi_config_t *wifi_config, int wifi_mode) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     if (wifi_mode == DB_WIFI_MODE_AP_LR) {
         ESP_LOGI(TAG, "Enabling LR Mode on access point. This device will be invisible to non-ESP32 devices!");
-        ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));
+        ESP_ERROR_CHECK(db_wifi_set_2g_protocols(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));
     } else {
         // Enable 11b/g/n so modern clients negotiate up to ~72 Mbps instead of being
         // pinned to 11b CCK (1-11 Mbps). The slow link was the underlying reason the
         // web GUI's polls were timing out >1 s and tripping the AbortController.
-        ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP,
+        ESP_ERROR_CHECK(db_wifi_set_2g_protocols(WIFI_IF_AP,
                 WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N));
     }
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, wifi_config));
@@ -321,6 +371,7 @@ static void db_ap_setup_and_start(wifi_config_t *wifi_config, int wifi_mode) {
     /* Start WiFi first — creates lwIP netif, DHCP auto-starts on default IP
        (only when dhcps_status == INIT). Then stop DHCP, set custom IP, restart. */
     ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(db_wifi_use_2g_band());
     ESP_ERROR_CHECK(esp_netif_dhcps_stop(esp_default_netif));
     esp_netif_ip_info_t ip;
     memset(&ip, 0, sizeof(esp_netif_ip_info_t));
@@ -453,14 +504,14 @@ int db_init_wifi_clientmode() {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     if (DB_PARAM_WIFI_EN_GN) {
         // only makes sense if the AP can not do proper N or you do not need range or want Wi-Fi 6 ax support
-#ifdef CONFIG_IDF_TARGET_ESP32C6
-        ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AX | WIFI_PROTOCOL_LR));
+#if defined(CONFIG_IDF_TARGET_ESP32C5) || defined(CONFIG_IDF_TARGET_ESP32C6)
+        ESP_ERROR_CHECK(db_wifi_set_2g_protocols(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AX | WIFI_PROTOCOL_LR));
 #else
-        ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N |
+        ESP_ERROR_CHECK(db_wifi_set_2g_protocols(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N |
                                                            WIFI_PROTOCOL_LR));
 #endif
     } else {
-        ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));  // range for sure
+        ESP_ERROR_CHECK(db_wifi_set_2g_protocols(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));  // range for sure
     }
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE)); // disable power saving
@@ -586,8 +637,9 @@ void db_init_wifi_espnow() {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(db_wifi_use_2g_band());
     ESP_ERROR_CHECK(esp_wifi_set_channel(DB_PARAM_CHANNEL, WIFI_SECOND_CHAN_NONE));
-    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));
+    ESP_ERROR_CHECK(db_wifi_set_2g_protocols(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));
     ESP_LOGI(TAG, "Enabled ESP-NOW WiFi Mode! LR Mode is set. This device will be invisible to non-ESP32 devices!");
     ESP_ERROR_CHECK(esp_read_mac(LOCAL_MAC_ADDRESS, ESP_MAC_WIFI_STA));
 }

@@ -42,6 +42,22 @@ configurable in the GUI for non-standard setups. Boards configured with firmware
 this scheme keep their stored `udp_listen_port=14550`; set it to 14555 (or factory-reset) to
 match a stock Skybrush server, or keep the server's `broadcast_port` override - both work.
 
+### ESP32-C5 (Seeed Studio XIAO ESP32-C5) - branch `c-5-integration`
+
+The fork also builds for the ESP32-C5 (2.4 GHz only, no 5 GHz). It needs ESP-IDF 5.5.2 or newer,
+so it has its own build script and sdkconfig, see [ESP32-C5.md](ESP32-C5.md):
+
+```bash
+./build_esp32c5.sh                      # -> build-codex/esp32c5/
+./build_esp32c5.sh -p /dev/ttyACM0 flash
+```
+
+Bench-verified on a XIAO ESP32-C5 (chip rev v1.0) with an ArduPilot MatekH743 on SERIAL2 at 921600:
+FC TX -> XIAO D7 (GPIO12, set as `gpio_rx`), FC RX <- XIAO D6 (GPIO11, set as `gpio_tx`), 3.3 V logic.
+The console is on the USB port, so those header pins are free for the FC. Tested: STA mode (join,
+discovery broadcast, unicast, TCP 5760, PARAM round trip), AP fallback after 80 s, AP mode telemetry.
+Test helpers are in `tools/c5-test/`.
+
 Unlike mavesp8266 there is no MAVLink parameter interface on component 240 (QGC's WiFi-Bridge
 settings page) - configuration is via the web GUI / REST API.
 

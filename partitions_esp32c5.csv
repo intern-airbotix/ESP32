@@ -1,0 +1,6 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# Fits the C5 firmware and website into the conservative default 2 MB flash layout.
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 1728K,
+www,      data, spiffs,  ,        0x30000,

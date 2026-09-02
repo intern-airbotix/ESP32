@@ -1,0 +1,4 @@
+# ESP32-C5 additions to the common sdkconfig.defaults.
+# Production C5 modules require ESP-IDF 5.5.2 or newer.
+CONFIG_IDF_TARGET="esp32c5"
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_esp32c5.csv"

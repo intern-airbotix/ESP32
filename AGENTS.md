@@ -1,5 +1,6 @@
 # Toolchain
-This project uses the esp-idf framework v5.4.4 - it compiles for the ESP32 (Classic), ESP32-S2, ESP32-S3, ESP32-C3 & ESP32-C6
+This project uses the esp-idf framework v5.4.4 - it compiles for the ESP32 (Classic), ESP32-S2, ESP32-S3, ESP32-C3 & ESP32-C6.
+The ESP32-C5 target is built separately with esp-idf v5.5.2 or newer via `./build_esp32c5.sh` (see ESP32-C5.md). Production C5 silicon does not work with esp-idf 5.4.
 
 # Development Rules
 For every function there must also be a doc string explaining it.
@@ -9,8 +10,8 @@ The web-interface (frontend) is compiled to a single file with everything includ
 
 # Limits
 Do not implement OTA Updates.
-Do not add support for the ESP32-C5.
-Do not add support for esp-idf 5.5 or higher.
+ESP32-C5 support is 2.4 GHz only: do not add 5 GHz channel selection without extending the channel parameter validation and the web-interface.
+Keep the non-C5 targets building with esp-idf 5.4.x; only the C5 build uses esp-idf 5.5.x.
 Do not add features specifically required for drone light shows.
 
 # Build & Execution Environment Setup

@@ -213,6 +213,8 @@ function get_esp_chip_model_str(esp_model_index) {
 		case 13:
 			return "ESP32-C6";
 		case 12:
+			return "ESP32-C2";
+		case 23:
 			return "ESP32-C5";
 	}
 }
