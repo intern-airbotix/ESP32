@@ -23,6 +23,7 @@ since it does not support video encoding.
 
 ## Features
 -   Bidirectional: serial-to-WiFi, serial-to-WiFi Long-Range (LR), serial-to-ESP-NOW link, Bluetooth LE
+-   **Dual-Band Wi-Fi 6 (2.4 GHz & 5 GHz)** support on ESP32-C5; Wi-Fi 6 on ESP32-C6; 2.4 GHz Wi-Fi on ESP32 Classic, C3, S2 & S3
 -   Support for **MAVLink**, **MSP**, **LTM** or **any other payload** using transparent option
 -   Affordable: ~7€
 -   Up to **150m range** using standard WiFi
@@ -62,6 +63,14 @@ Check [drone-bridge.com](https://drone-bridge.com) to get the latest release!
 
 ## Hardware
 
+### Supported Target Chips & Boards
+DroneBridge for ESP32 supports multiple Espressif SoC generations:
+- **ESP32-C5**: Dual-band Wi-Fi 6 (2.4 GHz & 5 GHz) + BLE 5 SoC (e.g., **Seeed Studio XIAO ESP32-C5** and generic ESP32-C5 boards).
+- **ESP32-C6**: Wi-Fi 6 (2.4 GHz) + BLE 5 SoC (e.g., official DroneBridge HWv1.x C6 boards).
+- **ESP32-C3**: Wi-Fi 4 + BLE 5 SoC (e.g., official DroneBridge HWv1.x C3 boards).
+- **ESP32 (Classic)**: Dual-core Wi-Fi 4 + Bluetooth classic/BLE.
+- **ESP32-S2 & ESP32-S3**: Single- and dual-core high-performance modules.
+
 **Officially supported and tested boards:**  
 Do the project and yourself a favour and use one of the officially supported and tested boards below.   
 These boards are very affordable, have everything you need, and are also very compact. Perfect for use on any drone. 
@@ -72,12 +81,72 @@ These boards are very affordable, have everything you need, and are also very co
 
 [For further info please check the wiki!](https://dronebridge.gitbook.io/docs/dronebridge-for-esp32/hardware-and-wiring)
 
+## ESP32-C5 Support & Technical Specifications
+
+DroneBridge now natively supports the **Espressif ESP32-C5**, bringing **Dual-Band (2.4 GHz & 5 GHz) Wi-Fi 6** connectivity to drone telemetry links. Dual-band operation significantly avoids congested 2.4 GHz industrial/ISM frequencies, providing ultra-clean telemetry transmission on the 5 GHz spectrum.
+
+### ESP32-C5 Chip Specifications
+| Feature | Specification |
+| :--- | :--- |
+| **Processor** | 32-bit RISC-V single-core High-Performance (HP) CPU up to **240 MHz** + Low-Power (LP) RISC-V 32-bit core up to **48 MHz** |
+| **Memory** | **400 KB** on-chip SRAM, **384 KB** ROM, 16 KB LP SRAM, external Quad/Octal SPI Flash & PSRAM support |
+| **Wi-Fi Subsystem** | **Dual-Band (2.4 GHz & 5 GHz)** Wi-Fi 6 (IEEE 802.11ax/ac/n/a/b/g) |
+| **Wi-Fi Bandwidth** | 20 MHz and 40 MHz channel bandwidth in both 2.4 GHz and 5 GHz bands |
+| **Wi-Fi 6 Features** | OFDMA (Downlink & Uplink), MU-MIMO, Target Wake Time (TWT), 1024-QAM |
+| **Long Range (LR)** | Espressif proprietary Wi-Fi LR mode supported |
+| **Bluetooth** | Bluetooth 5.0 (LE), Bluetooth Mesh, 2 Mbps PHY, Long Range Coded PHY (125 kbps / 500 kbps) |
+| **IEEE 802.15.4** | Thread and Zigbee 3.0 support |
+| **Security** | Hardware Secure Boot, Flash Encryption (AES-128/256), Cryptographic Accelerators (RSA, ECDSA, ECC, HMAC, SHA-2) |
+| **Operating Voltage** | 3.0 V ~ 3.6 V |
+
+### Seeed Studio XIAO ESP32-C5 Board Integration
+The **Seeed Studio XIAO ESP32-C5** is an ultra-compact (21 × 17.5 mm) thumb-sized development board, making it ideal for micro-drones, FPV quads, and weight-sensitive UAV builds.
+
+| Function | Pin / GPIO | Board Marking | Description |
+| :--- | :--- | :--- | :--- |
+| **Telemetry UART TX** | `GPIO 11` | `D6` | Connects to Flight Controller RX (default 57600 baud, up to 921600+) |
+| **Telemetry UART RX** | `GPIO 12` | `D7` | Connects to Flight Controller TX |
+| **Status LED** | `GPIO 27` | `L` | Onboard user LED (Active-Low): indicates serial MAVLink/radio traffic & binding |
+| **Factory Reset Button** | `GPIO 28` | `B` | Hardware button on the underside. Hold during boot to reset settings to default |
+| **USB Serial / JTAG** | `GPIO 13 / 14` | `USB-C` | Direct connection to PC Ground Control Station (GCS) without FTDI adapter |
+| **RF Antenna** | U.FL / IPEX | ANT | External dual-band 2.4 GHz / 5 GHz antenna connector |
+
+### Building from Source for ESP32-C5
+Using **ESP-IDF v5.5.x**:
+```bash
+# Set build target to esp32c5
+idf.py set-target esp32c5
+
+# Build using XIAO ESP32-C5 UART telemetry defaults
+idf.py -D SDKCONFIG_DEFAULTS="config_defaults/sdkconfig.defaults.xiao.esp32c5" build
+
+# Or build using XIAO ESP32-C5 USB-Serial (Ground Station) defaults
+idf.py -D SDKCONFIG_DEFAULTS="config_defaults/sdkconfig.defaults.xiao.USBSerial.esp32c5" build
+
+# Flash to connected board
+idf.py -p /dev/ttyACM0 flash
+```
+
 ## Installation/Flashing using precompiled binaries
 
 [It is recommended that you use the official online flashing tool!](https://drone-bridge.com/flasher/)
 
-In any other case, there are multiple ways how to flash the firmware.  
-**[For further info please check the wiki!](https://dronebridge.gitbook.io/docs/dronebridge-for-esp32/installation)**
+In any other case, there are multiple ways how to flash the firmware using `esptool.py`.  
+**Note for ESP32-C5**: The second-stage bootloader must be flashed at offset **`0x2000`** (rather than `0x0000` or `0x1000` used on other chips).
+
+```bash
+# ESP32-C5 (XIAO UART Telemetry):
+esptool.py --chip esp32c5 -b 460800 --before default_reset --after hard_reset write_flash \
+  --flash_mode dio --flash_size 2MB --flash_freq 80m \
+  0x2000 bootloader.bin 0x8000 partition-table.bin 0x10000 db_esp32.bin 0x190000 www.bin
+
+# ESP32-C5 USB-Serial (Ground Station direct USB-C mode):
+esptool.py --chip esp32c5 -b 460800 --before default_reset --after hard_reset write_flash \
+  --flash_mode dio --flash_size 2MB --flash_freq 80m \
+  0x2000 bootloader.bin 0x8000 partition-table.bin 0x10000 db_esp32.bin 0x190000 www.bin
+```
+
+**[For further info please check the wiki and flashing_instructions.txt!](https://dronebridge.gitbook.io/docs/dronebridge-for-esp32/installation)**
 
 ## Wiring
 
