@@ -30,3 +30,4 @@ If DroneBridge is running in access point mode and the computer is connected to 
 
 # MCP & Documentation for esp-idf
 There is an espressif-docs MCP available for using the esp-idf framework.
+
