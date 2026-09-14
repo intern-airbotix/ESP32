@@ -502,7 +502,7 @@ static void db_espnow_receive_callback(const esp_now_recv_info_t *recv_info, con
     recv_cb->data_len = len;
     recv_cb->rssi = recv_info->rx_ctrl == NULL ? -127 : recv_info->rx_ctrl->rssi;
     recv_cb->noise_floor = 0;
-#if defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32C2) || defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C6)
+#if defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32C2) || defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C6) || defined(CONFIG_IDF_TARGET_ESP32C5)
     if (recv_info->rx_ctrl != NULL) {
         recv_cb->noise_floor = recv_info->rx_ctrl->noise_floor;
     }

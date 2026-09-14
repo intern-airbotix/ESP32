@@ -56,6 +56,11 @@ BuildAndCopy "sdkconfig.defaults" "esp32c6" "esp32c6"
 BuildAndCopy "sdkconfig.defaults.USBSerial" "esp32c6_USBSerial" "esp32c6"
 BuildAndCopy "sdkconfig.defaults.noUARTConsole" "esp32c6_noUARTConsole" "esp32c6"
 
+# ESP32-C5 XIAO & Generic
+BuildAndCopy "sdkconfig.defaults.xiao.esp32c5" "esp32c5_xiao" "esp32c5"
+BuildAndCopy "sdkconfig.defaults.xiao.USBSerial.esp32c5" "esp32c5_xiao_USBSerial" "esp32c5"
+BuildAndCopy "sdkconfig.defaults.esp32c5" "esp32c5" "esp32c5"
+
 if (Test-Path $release_name_zip) {
     Remove-Item $release_name_zip -Verbose
 }

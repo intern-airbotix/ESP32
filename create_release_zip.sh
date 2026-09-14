@@ -63,6 +63,11 @@ build_and_copy "sdkconfig.defaults" "esp32c6" "esp32c6"
 build_and_copy "sdkconfig.defaults.USBSerial" "esp32c6_USBSerial" "esp32c6"
 build_and_copy "sdkconfig.defaults.noUARTConsole" "esp32c6_noUARTConsole" "esp32c6"
 
+# ESP32-C5 XIAO & Generic
+build_and_copy "sdkconfig.defaults.xiao.esp32c5" "esp32c5_xiao" "esp32c5"
+build_and_copy "sdkconfig.defaults.xiao.USBSerial.esp32c5" "esp32c5_xiao_USBSerial" "esp32c5"
+build_and_copy "sdkconfig.defaults.esp32c5" "esp32c5" "esp32c5"
+
 # Create the zip file
 if [ -f $release_name_zip ]; then
     rm -v $release_name_zip

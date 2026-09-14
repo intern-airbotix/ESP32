@@ -23,6 +23,11 @@ menu "DroneBridge for ESP32 Configuration"
                 The correct UART pins are set as defaults. No need to configure them manually.
                 Choose this if you have the official DroneBridge for ESP32 HWv1.x board with an ESP32-C6.
                 Enables RF switch via GPIO 13 and antenna selection on GPIO 14
+        config DB_XIAO_ESP32C5_BOARD
+            bool "Seeed Studio XIAO ESP32-C5 board"
+            help
+                The correct UART pins (TX GPIO 11, RX GPIO 12) and status LED (GPIO 27) are set as defaults.
+                Choose this if you have the Seeed Studio XIAO ESP32-C5 board.
     endchoice
 
     config DB_HAS_RF_SWITCH

@@ -25,16 +25,22 @@
 #include "db_parameters.h"
 #include "db_led_indicator.h"
 
-static const char *TAG = "DB_LED_IND";
-
 // Turn LED off if no qualifying activity was seen within this window.
 #define DB_STATUS_LED_TIMEOUT_MS 1000
-#ifdef CONFIG_DB_OFFICIAL_BOARD_1_X_C6
+#if defined(CONFIG_DB_OFFICIAL_BOARD_1_X_C6)
+#define DB_HAS_STATUS_LED 1
 #define DB_STATUS_LED_GPIO GPIO_NUM_15
 #define DB_STATUS_LED_ACTIVE_LOW 1
+#elif defined(CONFIG_DB_XIAO_ESP32C5_BOARD)
+#define DB_HAS_STATUS_LED 1
+#define DB_STATUS_LED_GPIO GPIO_NUM_27
+#define DB_STATUS_LED_ACTIVE_LOW 1
+#else
+#define DB_HAS_STATUS_LED 0
 #endif
 
-#ifdef CONFIG_DB_OFFICIAL_BOARD_1_X_C6
+#if DB_HAS_STATUS_LED
+static const char *TAG = "DB_LED_IND";
 static TickType_t db_status_led_last_serial_mavlink_tick = 0;
 static TickType_t db_status_led_last_radio_tick = 0;
 static bool db_status_led_initialized = false;
@@ -73,11 +79,11 @@ static bool db_status_led_on_state_from_gpio_level(int gpio_level) {
 #endif
 
 /**
- * Initializes status LED handling for C6 official boards.
+ * Initializes status LED handling for supported boards (C6 official boards, XIAO ESP32-C5).
  * LED starts in OFF state.
  */
 void db_status_led_init() {
-#ifdef CONFIG_DB_OFFICIAL_BOARD_1_X_C6
+#if DB_HAS_STATUS_LED
     gpio_reset_pin(DB_STATUS_LED_GPIO);
     // Keep input enabled so gpio_get_level() can be used to check current pin state.
     gpio_set_direction(DB_STATUS_LED_GPIO, GPIO_MODE_INPUT_OUTPUT);
@@ -93,7 +99,7 @@ void db_status_led_init() {
  * Used in AP, STA and ESP-NOW AIR modes.
  */
 void db_status_led_mark_serial_mavlink_rx() {
-#ifdef CONFIG_DB_OFFICIAL_BOARD_1_X_C6
+#if DB_HAS_STATUS_LED
     db_status_led_last_serial_mavlink_tick = xTaskGetTickCount();
 #endif
 }
@@ -103,7 +109,7 @@ void db_status_led_mark_serial_mavlink_rx() {
  * Used in AP-LR and ESP-NOW GND modes.
  */
 void db_status_led_mark_radio_rx() {
-#ifdef CONFIG_DB_OFFICIAL_BOARD_1_X_C6
+#if DB_HAS_STATUS_LED
     db_status_led_last_radio_tick = xTaskGetTickCount();
 #endif
 }
@@ -114,7 +120,7 @@ void db_status_led_mark_radio_rx() {
  * @param state Binding state to display; DB_STATUS_LED_BINDING_NONE restores traffic indication.
  */
 void db_status_led_set_binding_state(db_status_led_binding_state_t state) {
-#ifdef CONFIG_DB_OFFICIAL_BOARD_1_X_C6
+#if DB_HAS_STATUS_LED
     db_status_led_binding_state = state;
 #else
     (void) state;
@@ -126,7 +132,7 @@ void db_status_led_set_binding_state(db_status_led_binding_state_t state) {
  * Intended to be called periodically (timer-driven).
  */
 void db_status_led_process() {
-#ifdef CONFIG_DB_OFFICIAL_BOARD_1_X_C6
+#if DB_HAS_STATUS_LED
     if (!db_status_led_initialized) {
         return;
     }

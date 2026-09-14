@@ -64,6 +64,8 @@
 #define DB_RESET_PIN GPIO_NUM_9
 #elif CONFIG_IDF_TARGET_ESP32C6
 #define DB_RESET_PIN GPIO_NUM_9
+#elif CONFIG_IDF_TARGET_ESP32C5
+#define DB_RESET_PIN GPIO_NUM_28
 #elif CONFIG_IDF_TARGET_ESP32S2
 #define DB_RESET_PIN GPIO_NUM_0
 #elif CONFIG_IDF_TARGET_ESP32S3
@@ -320,12 +322,29 @@ void db_init_wifi_apmode(int wifi_mode) {
 #pragma GCC diagnostic pop
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    if (wifi_mode == DB_WIFI_MODE_AP_LR) {
+        ESP_LOGI(TAG, "Enabling LR Mode on access point. This device will be invisible to non-ESP32 devices!");
+        wifi_protocols_t protocols = {
+            .ghz_2g = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR,
+            .ghz_5g = 0
+        };
+        ESP_ERROR_CHECK(esp_wifi_set_protocols(WIFI_IF_AP, &protocols));
+    } else {
+        wifi_protocols_t protocols = {
+            .ghz_2g = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AX,
+            .ghz_5g = WIFI_PROTOCOL_11A | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AC | WIFI_PROTOCOL_11AX
+        };
+        ESP_ERROR_CHECK(esp_wifi_set_protocols(WIFI_IF_AP, &protocols));
+    }
+#else
     if (wifi_mode == DB_WIFI_MODE_AP_LR) {
         ESP_LOGI(TAG, "Enabling LR Mode on access point. This device will be invisible to non-ESP32 devices!");
         ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));
     } else {
         ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B));
     }
+#endif
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     wifi_country_t wifi_country = {.cc = "US", .schan = 1, .nchan = 13, .policy = WIFI_COUNTRY_POLICY_MANUAL};
     ESP_ERROR_CHECK(esp_wifi_set_country(&wifi_country));
@@ -407,9 +426,16 @@ int db_init_wifi_clientmode() {
 #pragma GCC diagnostic pop
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    wifi_protocols_t protocols = {
+        .ghz_2g = DB_PARAM_WIFI_EN_GN ? (WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AX | WIFI_PROTOCOL_LR) : (WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR),
+        .ghz_5g = DB_PARAM_WIFI_EN_GN ? (WIFI_PROTOCOL_11A | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AC | WIFI_PROTOCOL_11AX) : 0
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_protocols(WIFI_IF_STA, &protocols));
+#else
     if (DB_PARAM_WIFI_EN_GN) {
         // only makes sense if the AP can not do proper N or you do not need range or want Wi-Fi 6 ax support
-#ifdef CONFIG_IDF_TARGET_ESP32C6
+#if defined(CONFIG_IDF_TARGET_ESP32C6)
         ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AX | WIFI_PROTOCOL_LR));
 #else
         ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N |
@@ -418,6 +444,7 @@ int db_init_wifi_clientmode() {
     } else {
         ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));  // range for sure
     }
+#endif
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE)); // disable power saving
     ESP_ERROR_CHECK(esp_wifi_start());
@@ -473,7 +500,15 @@ void db_init_wifi_espnow_channel(uint8_t channel) {
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE));
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    wifi_protocols_t protocols = {
+        .ghz_2g = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR,
+        .ghz_5g = 0
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_protocols(WIFI_IF_STA, &protocols));
+#else
     ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));
+#endif
     ESP_LOGI(TAG, "Enabled ESP-NOW WiFi Mode! LR Mode is set. This device will be invisible to non-ESP32 devices!");
     ESP_ERROR_CHECK(esp_read_mac(LOCAL_MAC_ADDRESS, ESP_MAC_WIFI_STA));
 }

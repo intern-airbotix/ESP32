@@ -66,6 +66,12 @@ typedef bool (*db_param_output_callback_t)(const uint8_t *line, size_t line_leng
 #define DB_DEFAULT_UART_RTS_PIN GPIO_NUM_22
 #define DB_DEFAULT_UART_CTS_PIN GPIO_NUM_23
 #define DB_DEFAULT_UART_BAUD_RATE 57600
+#elif CONFIG_DB_XIAO_ESP32C5_BOARD
+#define DB_DEFAULT_UART_TX_PIN GPIO_NUM_11
+#define DB_DEFAULT_UART_RX_PIN GPIO_NUM_12
+#define DB_DEFAULT_UART_RTS_PIN GPIO_NUM_0
+#define DB_DEFAULT_UART_CTS_PIN GPIO_NUM_0
+#define DB_DEFAULT_UART_BAUD_RATE 57600
 #elif CONFIG_DB_GENERIC_BOARD
 // initially set pins to 0 to allow the start of the system on all boards. User has to set the correct pins
 #define DB_DEFAULT_UART_TX_PIN GPIO_NUM_0
