@@ -352,6 +352,11 @@ static esp_err_t system_info_get_handler(httpd_req_t *req) {
 #else
     cJSON_AddNumberToObject(root, "serial_via_JTAG", 0);
 #endif
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    cJSON_AddNumberToObject(root, "has_5g_support", 1);
+#else
+    cJSON_AddNumberToObject(root, "has_5g_support", 0);
+#endif
     const char *sys_info = cJSON_Print(root);
     db_http_resp_sendstr_with_retry(req, sys_info);
     free((void *) sys_info);

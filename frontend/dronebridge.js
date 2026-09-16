@@ -100,11 +100,11 @@ function update_wifi_band_notice(band, channel) {
 	const noticeDiv = document.getElementById("wifi_band_notice");
 	const noticeText = document.getElementById("wifi_band_notice_text");
 	if (!noticeDiv || !noticeText) return;
-	noticeDiv.style.display = "block";
 	if (band === "5") {
-		noticeText.innerHTML = "⚡ <b>5 GHz Band Selected (Channel " + channel + ")</b>: Click <b>Save Settings & Reboot</b> to apply.<br>⚠️ <i>Ensure your connecting device (phone/laptop) supports 5 GHz Wi-Fi to reconnect!</i>";
+		noticeDiv.style.display = "block";
+		noticeText.innerHTML = "<strong>Notice:</strong> 5 GHz Band selected (Channel " + channel + "). Click <strong>Save Settings & Reboot</strong> to apply.<br><em>Ensure your connecting device (phone/laptop) supports 5 GHz Wi-Fi to reconnect.</em>";
 	} else {
-		noticeText.innerHTML = "ℹ️ <b>2.4 GHz Band Selected (Channel " + channel + ")</b>: Click <b>Save Settings & Reboot</b> to apply.";
+		noticeDiv.style.display = "none";
 	}
 }
 
@@ -144,7 +144,7 @@ function change_ap_ip_visibility() {
 		elements.static_ip_config_div.style.display = "block";
 	} else {
 		elements.ap_ip_div.style.display = "block";
-		if (elements.ap_band_div) elements.ap_band_div.style.display = (esp_chip_model === 12) ? "block" : "none";
+		if (elements.ap_band_div) elements.ap_band_div.style.display = "block";
 		elements.ap_channel_div.style.display = "block";
 		elements.wifi_en_gn_div.style.display = "none";
 		elements.static_ip_config_div.style.display = "none";
@@ -362,6 +362,8 @@ function get_esp_chip_model_str(esp_model_index) {
 		case 13:
 			return "ESP32-C6";
 		case 12:
+			return "ESP32-C2";
+		case 23:
 			return "ESP32-C5";
 	}
 }
@@ -386,31 +388,16 @@ async function get_system_info() {
 			document.getElementById("ant_use_ext_div").style.display = "none";
 		}
 		esp_chip_model = json_data["esp_chip_model"];
+		const has5g = (parseInt(json_data["has_5g_support"]) === 1) || (esp_chip_model === 23);
 		const band5gOption = document.getElementById("wifi_band_5g_option");
-		const apBandDiv = document.getElementById("ap_band_div");
-		const apChanDiv = document.getElementById("ap_channel_div");
-		const apIpDiv = document.getElementById("ap_ip_div");
-		if (esp_chip_model === 12) {
-			// ESP32-C5 supports 5GHz
-			if (band5gOption) {
+		if (band5gOption) {
+			if (has5g) {
 				band5gOption.hidden = false;
 				band5gOption.disabled = false;
-			}
-			if (apBandDiv) {
-				apBandDiv.style.display = "block";
-				apBandDiv.className = "four columns";
-			}
-			if (apChanDiv) apChanDiv.className = "four columns";
-			if (apIpDiv) apIpDiv.className = "four columns";
-		} else {
-			// Non-5G chip: lock to 2.4 GHz
-			if (band5gOption) {
+			} else {
 				band5gOption.hidden = true;
 				band5gOption.disabled = true;
 			}
-			if (apBandDiv) apBandDiv.style.display = "none";
-			if (apChanDiv) apChanDiv.className = "six columns";
-			if (apIpDiv) apIpDiv.className = "six columns";
 		}
 		return true;
 	} catch (error) {
@@ -748,7 +735,7 @@ function show_reboot_status_modal(is5g, channel) {
 	if (!modal || !body || !timer) return;
 
 	modal.style.display = "block";
-	title.textContent = "🔄 ESP32 is Rebooting...";
+	title.textContent = "Rebooting ESP32...";
 
 	if (is5g) {
 		body.innerHTML = "<b>Configured Mode:</b> 5 GHz Wi-Fi (Channel " + channel + ")<br><br>" +
@@ -778,6 +765,10 @@ function show_reboot_status_modal(is5g, channel) {
 	}, 1000);
 }
 
+/**
+ * Validates, serializes, and saves the settings form via REST API,
+ * prompts the user with confirmation, and displays a reboot countdown modal.
+ */
 function save_settings() {
 	let form = document.getElementById("settings_form");
 	if (check_validity()) {
