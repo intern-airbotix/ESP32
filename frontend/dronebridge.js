@@ -284,6 +284,13 @@ async function get_system_info() {
 		} else {
 			document.getElementById("ant_use_ext_div").style.display = "none";
 		}
+		// Show 5 GHz channels only if the connected board is an ESP32-C5 (model 12)
+		const chan5gOptgroup = document.getElementById("wifi_chan_5g");
+		if (chan5gOptgroup) {
+			const is5gCapable = (json_data["esp_chip_model"] === 12);
+			chan5gOptgroup.hidden = !is5gCapable;
+			chan5gOptgroup.disabled = !is5gCapable;
+		}
 		return true;
 	} catch (error) {
 		console.error("Failed to load or display system information:", error);

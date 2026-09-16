@@ -324,6 +324,10 @@ void db_init_wifi_apmode(int wifi_mode) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
 #if CONFIG_SOC_WIFI_SUPPORT_5G
     if (wifi_mode == DB_WIFI_MODE_AP_LR) {
+        if (wifi_config.ap.channel > 14) {
+            ESP_LOGW(TAG, "LR mode requires a 2.4 GHz channel. Switching from channel %d to 6", wifi_config.ap.channel);
+            wifi_config.ap.channel = 6;
+        }
         ESP_LOGI(TAG, "Enabling LR Mode on access point. This device will be invisible to non-ESP32 devices!");
         wifi_protocols_t protocols = {
             .ghz_2g = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR,
@@ -331,12 +335,30 @@ void db_init_wifi_apmode(int wifi_mode) {
         };
         ESP_ERROR_CHECK(esp_wifi_set_protocols(WIFI_IF_AP, &protocols));
     } else {
+        if (wifi_config.ap.channel > 14) {
+            ESP_LOGI(TAG, "Starting Access Point on 5 GHz band (channel %d)", wifi_config.ap.channel);
+        } else {
+            ESP_LOGI(TAG, "Starting Access Point on 2.4 GHz band (channel %d)", wifi_config.ap.channel);
+        }
         wifi_protocols_t protocols = {
             .ghz_2g = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AX,
             .ghz_5g = WIFI_PROTOCOL_11A | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AC | WIFI_PROTOCOL_11AX
         };
         ESP_ERROR_CHECK(esp_wifi_set_protocols(WIFI_IF_AP, &protocols));
+        wifi_bandwidths_t bws = {
+            .ghz_2g = WIFI_BW_HT20,
+            .ghz_5g = WIFI_BW_HT20
+        };
+        ESP_ERROR_CHECK(esp_wifi_set_bandwidths(WIFI_IF_AP, &bws));
     }
+    wifi_country_t wifi_country = {
+        .cc = "US",
+        .schan = 1,
+        .nchan = 13,
+        .policy = WIFI_COUNTRY_POLICY_MANUAL,
+        .wifi_5g_channel_mask = 0
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_country(&wifi_country));
 #else
     if (wifi_mode == DB_WIFI_MODE_AP_LR) {
         ESP_LOGI(TAG, "Enabling LR Mode on access point. This device will be invisible to non-ESP32 devices!");
@@ -344,10 +366,10 @@ void db_init_wifi_apmode(int wifi_mode) {
     } else {
         ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B));
     }
-#endif
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     wifi_country_t wifi_country = {.cc = "US", .schan = 1, .nchan = 13, .policy = WIFI_COUNTRY_POLICY_MANUAL};
     ESP_ERROR_CHECK(esp_wifi_set_country(&wifi_country));
+#endif
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
     DB_RADIO_IS_OFF = false; // just to be sure, but should not be necessary
@@ -499,6 +521,12 @@ void db_init_wifi_espnow_channel(uint8_t channel) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    if (channel > 14) {
+        ESP_LOGW(TAG, "ESP-NOW requires a 2.4 GHz channel. Switching from channel %d to 6", channel);
+        channel = 6;
+    }
+#endif
     ESP_ERROR_CHECK(esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE));
 #if CONFIG_SOC_WIFI_SUPPORT_5G
     wifi_protocols_t protocols = {

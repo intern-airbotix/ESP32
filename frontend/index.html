@@ -118,19 +118,32 @@
                 <div id="ap_channel_div" class="six columns">
                     <label for="wifi_chan">Channel</label>
                     <select id="wifi_chan" name="wifi_chan" form="settings_form">
-                        <option value="1">1</option>
-                        <option value="2">2</option>
-                        <option value="3">3</option>
-                        <option value="4">4</option>
-                        <option value="5">5</option>
-                        <option value="6">6</option>
-                        <option value="7">7</option>
-                        <option value="8">8</option>
-                        <option value="9">9</option>
-                        <option value="10">10</option>
-                        <option value="11">11</option>
-                        <option value="12">12</option>
-                        <option value="13">13</option>
+                        <optgroup label="2.4 GHz">
+                            <option value="1">1 (2412 MHz)</option>
+                            <option value="2">2 (2417 MHz)</option>
+                            <option value="3">3 (2422 MHz)</option>
+                            <option value="4">4 (2427 MHz)</option>
+                            <option value="5">5 (2432 MHz)</option>
+                            <option value="6">6 (2437 MHz)</option>
+                            <option value="7">7 (2442 MHz)</option>
+                            <option value="8">8 (2447 MHz)</option>
+                            <option value="9">9 (2452 MHz)</option>
+                            <option value="10">10 (2457 MHz)</option>
+                            <option value="11">11 (2462 MHz)</option>
+                            <option value="12">12 (2467 MHz)</option>
+                            <option value="13">13 (2472 MHz)</option>
+                        </optgroup>
+                        <optgroup id="wifi_chan_5g" label="5 GHz (ESP32-C5)">
+                            <option value="36">36 (5180 MHz)</option>
+                            <option value="40">40 (5200 MHz)</option>
+                            <option value="44">44 (5220 MHz)</option>
+                            <option value="48">48 (5240 MHz)</option>
+                            <option value="149">149 (5745 MHz)</option>
+                            <option value="153">153 (5765 MHz)</option>
+                            <option value="157">157 (5785 MHz)</option>
+                            <option value="161">161 (5805 MHz)</option>
+                            <option value="165">165 (5825 MHz)</option>
+                        </optgroup>
                     </select>
                 </div>
                 <div class="six columns" id="ap_ip_div">

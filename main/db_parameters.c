@@ -89,7 +89,11 @@ db_parameter_t db_param_channel = {
                         .value = 6,
                         .default_value = 6,
                         .min = 1,
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+                        .max = 165,
+#else
                         .max = 13,
+#endif
                 }
         }
 };
@@ -980,6 +984,24 @@ bool db_param_is_valid_str(char *new_string_value, db_parameter_t *target_param)
  */
 bool db_param_is_valid_u8(const uint8_t new_u8_value, db_parameter_t *target_param) {
     if (new_u8_value <= target_param->value.db_param_u8.max && new_u8_value >= target_param->value.db_param_u8.min) {
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+        if (target_param == &db_param_channel) {
+            // Valid 2.4 GHz channels: 1-14; Valid 5 GHz channels: 36-64, 100-144, 149-165
+            if (new_u8_value <= 14) {
+                return true;
+            }
+            if (new_u8_value >= 36 && new_u8_value <= 64 && (new_u8_value - 36) % 4 == 0) {
+                return true;
+            }
+            if (new_u8_value >= 100 && new_u8_value <= 144 && (new_u8_value - 100) % 4 == 0) {
+                return true;
+            }
+            if (new_u8_value >= 149 && new_u8_value <= 165 && (new_u8_value - 149) % 4 == 0) {
+                return true;
+            }
+            return false;
+        }
+#endif
         return true;
     } else { return false; }
 }
