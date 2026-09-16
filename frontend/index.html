@@ -115,40 +115,41 @@
                 </div>
             </div>
             <div class="row">
-                <div id="ap_channel_div" class="six columns">
-                    <label for="wifi_chan">Channel</label>
-                    <select id="wifi_chan" name="wifi_chan" form="settings_form">
-                        <optgroup label="2.4 GHz">
-                            <option value="1">1 (2412 MHz)</option>
-                            <option value="2">2 (2417 MHz)</option>
-                            <option value="3">3 (2422 MHz)</option>
-                            <option value="4">4 (2427 MHz)</option>
-                            <option value="5">5 (2432 MHz)</option>
-                            <option value="6">6 (2437 MHz)</option>
-                            <option value="7">7 (2442 MHz)</option>
-                            <option value="8">8 (2447 MHz)</option>
-                            <option value="9">9 (2452 MHz)</option>
-                            <option value="10">10 (2457 MHz)</option>
-                            <option value="11">11 (2462 MHz)</option>
-                            <option value="12">12 (2467 MHz)</option>
-                            <option value="13">13 (2472 MHz)</option>
-                        </optgroup>
-                        <optgroup id="wifi_chan_5g" label="5 GHz (ESP32-C5)">
-                            <option value="36">36 (5180 MHz)</option>
-                            <option value="40">40 (5200 MHz)</option>
-                            <option value="44">44 (5220 MHz)</option>
-                            <option value="48">48 (5240 MHz)</option>
-                            <option value="149">149 (5745 MHz)</option>
-                            <option value="153">153 (5765 MHz)</option>
-                            <option value="157">157 (5785 MHz)</option>
-                            <option value="161">161 (5805 MHz)</option>
-                            <option value="165">165 (5825 MHz)</option>
-                        </optgroup>
+                <div id="ap_band_div" class="four columns">
+                    <label for="wifi_band_select">Wi-Fi Band</label>
+                    <select id="wifi_band_select" onchange="on_wifi_band_changed()">
+                        <option value="2.4" selected>2.4 GHz</option>
+                        <option value="5" id="wifi_band_5g_option">5 GHz (ESP32-C5)</option>
                     </select>
                 </div>
-                <div class="six columns" id="ap_ip_div">
+                <div id="ap_channel_div" class="four columns">
+                    <label for="wifi_chan">Channel</label>
+                    <select id="wifi_chan" name="wifi_chan" form="settings_form" onchange="on_wifi_channel_changed()">
+                        <option value="1">1 (2412 MHz)</option>
+                        <option value="2">2 (2417 MHz)</option>
+                        <option value="3">3 (2422 MHz)</option>
+                        <option value="4">4 (2427 MHz)</option>
+                        <option value="5">5 (2432 MHz)</option>
+                        <option value="6" selected>6 (2437 MHz)</option>
+                        <option value="7">7 (2442 MHz)</option>
+                        <option value="8">8 (2447 MHz)</option>
+                        <option value="9">9 (2452 MHz)</option>
+                        <option value="10">10 (2457 MHz)</option>
+                        <option value="11">11 (2462 MHz)</option>
+                        <option value="12">12 (2467 MHz)</option>
+                        <option value="13">13 (2472 MHz)</option>
+                    </select>
+                </div>
+                <div class="four columns" id="ap_ip_div">
                     <label for="ap_ip">Gateway IP address</label>
                     <input type="text" name="ap_ip" value="" id="ap_ip">
+                </div>
+            </div>
+            <div id="wifi_band_notice" class="row" style="display: none; margin-bottom: 12px;">
+                <div class="twelve columns">
+                    <div id="wifi_band_notice_box" style="padding: 10px 14px; border-radius: 4px; font-size: 13px; line-height: 1.4; border-left: 4px solid #ff9734; background: rgba(0, 31, 63, 0.7); color: #fff;">
+                        <span id="wifi_band_notice_text"></span>
+                    </div>
                 </div>
             </div>
             <div id="wifi_en_gn_div" class="row">
@@ -353,5 +354,13 @@
     setTimeout(change_ap_ip_visibility, 500)
     setTimeout(change_uart_visibility, 500)
 </script>
+<div id="reboot_modal" style="display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.75); backdrop-filter: blur(4px);">
+    <div style="background: #001f3f; border: 2px solid #ff9734; border-radius: 8px; width: 90%; max-width: 480px; margin: 15% auto; padding: 25px; text-align: center; box-shadow: 0 6px 24px rgba(0,0,0,0.6); color: #fff;">
+        <h3 id="reboot_modal_title" style="color: #ff9734; margin-bottom: 14px;">ESP32 Rebooting...</h3>
+        <p id="reboot_modal_body" style="font-size: 14px; line-height: 1.6; margin-bottom: 18px; text-align: left;"></p>
+        <div style="font-size: 14px; font-weight: bold; color: #ff9734; margin-bottom: 8px;" id="reboot_modal_timer">Waiting for restart...</div>
+        <div style="font-size: 12px; color: #bbb;">If page does not reload automatically, manually reconnect your Wi-Fi and refresh.</div>
+    </div>
+</div>
 </body>
 </html>

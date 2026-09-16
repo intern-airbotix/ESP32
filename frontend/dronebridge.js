@@ -14,6 +14,100 @@ let recv_ser_bytes = 0;		// Total bytes received from serial interface
 let serial_dec_mav_msgs = 0;	// Total MAVLink messages decoded from serial interface
 let set_telem_proto = null;		// Telemetry protocol received by the ESP32
 
+const CHANNELS_2G = [
+	{ val: "1", text: "1 (2412 MHz)" },
+	{ val: "2", text: "2 (2417 MHz)" },
+	{ val: "3", text: "3 (2422 MHz)" },
+	{ val: "4", text: "4 (2427 MHz)" },
+	{ val: "5", text: "5 (2432 MHz)" },
+	{ val: "6", text: "6 (2437 MHz)" },
+	{ val: "7", text: "7 (2442 MHz)" },
+	{ val: "8", text: "8 (2447 MHz)" },
+	{ val: "9", text: "9 (2452 MHz)" },
+	{ val: "10", text: "10 (2457 MHz)" },
+	{ val: "11", text: "11 (2462 MHz)" },
+	{ val: "12", text: "12 (2467 MHz)" },
+	{ val: "13", text: "13 (2472 MHz)" },
+];
+
+const CHANNELS_5G = [
+	{ val: "36", text: "36 (5180 MHz)" },
+	{ val: "40", text: "40 (5200 MHz)" },
+	{ val: "44", text: "44 (5220 MHz)" },
+	{ val: "48", text: "48 (5240 MHz)" },
+	{ val: "149", text: "149 (5745 MHz)" },
+	{ val: "153", text: "153 (5765 MHz)" },
+	{ val: "157", text: "157 (5785 MHz)" },
+	{ val: "161", text: "161 (5805 MHz)" },
+	{ val: "165", text: "165 (5825 MHz)" },
+];
+
+/**
+ * Populates the Wi-Fi channel dropdown based on the selected band.
+ * @param {string} band "2.4" or "5"
+ * @param {string|number} selected_channel Channel number to select
+ */
+function populate_wifi_channels(band, selected_channel) {
+	const chanSelect = document.getElementById("wifi_chan");
+	if (!chanSelect) return;
+	chanSelect.innerHTML = "";
+	const list = (band === "5") ? CHANNELS_5G : CHANNELS_2G;
+	let matched = false;
+	const selStr = String(selected_channel);
+	list.forEach(item => {
+		const opt = document.createElement("option");
+		opt.value = item.val;
+		opt.textContent = item.text;
+		if (item.val === selStr) {
+			opt.selected = true;
+			matched = true;
+		}
+		chanSelect.appendChild(opt);
+	});
+	if (!matched && list.length > 0) {
+		chanSelect.value = (band === "5") ? "36" : "6";
+	}
+}
+
+/**
+ * Handles user changing the Wi-Fi band selector.
+ */
+function on_wifi_band_changed() {
+	const bandSelect = document.getElementById("wifi_band_select");
+	const band = bandSelect ? bandSelect.value : "2.4";
+	const defaultChan = (band === "5") ? "36" : "6";
+	populate_wifi_channels(band, defaultChan);
+	update_wifi_band_notice(band, defaultChan);
+}
+
+/**
+ * Handles user changing the channel within the current band.
+ */
+function on_wifi_channel_changed() {
+	const bandSelect = document.getElementById("wifi_band_select");
+	const band = bandSelect ? bandSelect.value : "2.4";
+	const chanSelect = document.getElementById("wifi_chan");
+	const chan = chanSelect ? chanSelect.value : (band === "5" ? "36" : "6");
+	update_wifi_band_notice(band, chan);
+}
+
+/**
+ * Updates the reminder notice banner when the band or channel is changed.
+ * @param {string} band "2.4" or "5"
+ * @param {string|number} channel Selected channel number
+ */
+function update_wifi_band_notice(band, channel) {
+	const noticeDiv = document.getElementById("wifi_band_notice");
+	const noticeText = document.getElementById("wifi_band_notice_text");
+	if (!noticeDiv || !noticeText) return;
+	noticeDiv.style.display = "block";
+	if (band === "5") {
+		noticeText.innerHTML = "⚡ <b>5 GHz Band Selected (Channel " + channel + ")</b>: Click <b>Save Settings & Reboot</b> to apply.<br>⚠️ <i>Ensure your connecting device (phone/laptop) supports 5 GHz Wi-Fi to reconnect!</i>";
+	} else {
+		noticeText.innerHTML = "ℹ️ <b>2.4 GHz Band Selected (Channel " + channel + ")</b>: Click <b>Save Settings & Reboot</b> to apply.";
+	}
+}
+
 function change_radio_dis_arm_visibility() {
 	// we only support this feature when MAVLink or LTM are set AND when a standard Wi-Fi mode or BLE is enabled
 	let radio_dis_onarm_div = document.getElementById("radio_dis_onarm_div")
@@ -28,7 +122,9 @@ function change_ap_ip_visibility() {
 	const esp32Mode = document.getElementById("esp32_mode").value;
 	const elements = {
 		ap_ip_div: document.getElementById("ap_ip_div"),
+		ap_band_div: document.getElementById("ap_band_div"),
 		ap_channel_div: document.getElementById("ap_channel_div"),
+		wifi_band_notice: document.getElementById("wifi_band_notice"),
 		lr_disclaimer_div: document.getElementById("esp-lr-ap-disclaimer"),
 		ble_disclaimer_div: document.getElementById("ble_disclaimer_div"),
 		wifi_ssid_div: document.getElementById("wifi_ssid_div"),
@@ -41,11 +137,14 @@ function change_ap_ip_visibility() {
 
 	if (esp32Mode === "2") {
 		elements.ap_ip_div.style.display = "none";
+		if (elements.ap_band_div) elements.ap_band_div.style.display = "none";
 		elements.ap_channel_div.style.display = "none";
+		if (elements.wifi_band_notice) elements.wifi_band_notice.style.display = "none";
 		elements.wifi_en_gn_div.style.display = "block";
 		elements.static_ip_config_div.style.display = "block";
 	} else {
 		elements.ap_ip_div.style.display = "block";
+		if (elements.ap_band_div) elements.ap_band_div.style.display = (esp_chip_model === 12) ? "block" : "none";
 		elements.ap_channel_div.style.display = "block";
 		elements.wifi_en_gn_div.style.display = "none";
 		elements.static_ip_config_div.style.display = "none";
@@ -54,9 +153,11 @@ function change_ap_ip_visibility() {
 	if (esp32Mode === "6") {
 		elements.ble_disclaimer_div.style.display = "block";
 		elements.wifi_ssid_div.style.display = "none";
+		if (elements.ap_band_div) elements.ap_band_div.style.display = "none";
 		elements.ap_channel_div.style.display = "none";
 		elements.pass_div.style.display = "none";
 		elements.ap_ip_div.style.display = "none";
+		if (elements.wifi_band_notice) elements.wifi_band_notice.style.display = "none";
 	} else {
 		elements.ble_disclaimer_div.style.display = "none";
 		elements.wifi_ssid_div.style.display = "block";
@@ -284,12 +385,32 @@ async function get_system_info() {
 		} else {
 			document.getElementById("ant_use_ext_div").style.display = "none";
 		}
-		// Show 5 GHz channels only if the connected board is an ESP32-C5 (model 12)
-		const chan5gOptgroup = document.getElementById("wifi_chan_5g");
-		if (chan5gOptgroup) {
-			const is5gCapable = (json_data["esp_chip_model"] === 12);
-			chan5gOptgroup.hidden = !is5gCapable;
-			chan5gOptgroup.disabled = !is5gCapable;
+		esp_chip_model = json_data["esp_chip_model"];
+		const band5gOption = document.getElementById("wifi_band_5g_option");
+		const apBandDiv = document.getElementById("ap_band_div");
+		const apChanDiv = document.getElementById("ap_channel_div");
+		const apIpDiv = document.getElementById("ap_ip_div");
+		if (esp_chip_model === 12) {
+			// ESP32-C5 supports 5GHz
+			if (band5gOption) {
+				band5gOption.hidden = false;
+				band5gOption.disabled = false;
+			}
+			if (apBandDiv) {
+				apBandDiv.style.display = "block";
+				apBandDiv.className = "four columns";
+			}
+			if (apChanDiv) apChanDiv.className = "four columns";
+			if (apIpDiv) apIpDiv.className = "four columns";
+		} else {
+			// Non-5G chip: lock to 2.4 GHz
+			if (band5gOption) {
+				band5gOption.hidden = true;
+				band5gOption.disabled = true;
+			}
+			if (apBandDiv) apBandDiv.style.display = "none";
+			if (apChanDiv) apChanDiv.className = "six columns";
+			if (apIpDiv) apIpDiv.className = "six columns";
 		}
 		return true;
 	} catch (error) {
@@ -472,6 +593,14 @@ async function get_settings() {
 		console.log("Received settings: " + json_data)
 		for (const key in json_data) {
 			if (json_data.hasOwnProperty(key)) {
+				if (key === "wifi_chan") {
+					let chanVal = parseInt(json_data[key]);
+					let band = chanVal > 14 ? "5" : "2.4";
+					let bandElem = document.getElementById("wifi_band_select");
+					if (bandElem) bandElem.value = band;
+					populate_wifi_channels(band, chanVal);
+					continue;
+				}
 				let elem = document.getElementById(key)
 				if (elem != null) {
 					if (elem.type === "checkbox") {
@@ -606,18 +735,70 @@ function check_for_issues() {
 	}
 }
 
+/**
+ * Displays the reboot countdown overlay modal after saving settings.
+ * @param {boolean} is5g True if new settings configure 5 GHz Wi-Fi
+ * @param {string|number} channel Channel number
+ */
+function show_reboot_status_modal(is5g, channel) {
+	const modal = document.getElementById("reboot_modal");
+	const title = document.getElementById("reboot_modal_title");
+	const body = document.getElementById("reboot_modal_body");
+	const timer = document.getElementById("reboot_modal_timer");
+	if (!modal || !body || !timer) return;
+
+	modal.style.display = "block";
+	title.textContent = "🔄 ESP32 is Rebooting...";
+
+	if (is5g) {
+		body.innerHTML = "<b>Configured Mode:</b> 5 GHz Wi-Fi (Channel " + channel + ")<br><br>" +
+			"• Your connection to the ESP32 will disconnect momentarily.<br>" +
+			"• The ESP32 is rebooting and launching the Access Point on 5 GHz.<br>" +
+			"• Please wait ~5 seconds, then open your device Wi-Fi settings and reconnect to <b>DroneBridge ESP32</b>.";
+	} else {
+		body.innerHTML = "<b>Configured Mode:</b> 2.4 GHz Wi-Fi (Channel " + channel + ")<br><br>" +
+			"• Your connection to the ESP32 will disconnect momentarily.<br>" +
+			"• The ESP32 is rebooting to apply the new settings.<br>" +
+			"• Please reconnect your device to <b>DroneBridge ESP32</b> once it restarts.";
+	}
+
+	let countdown = 8;
+	timer.textContent = "Reconnecting in " + countdown + " seconds...";
+	const interval = setInterval(() => {
+		countdown--;
+		if (countdown > 0) {
+			timer.textContent = "Reconnecting in " + countdown + " seconds...";
+		} else {
+			clearInterval(interval);
+			timer.textContent = "Reloading page...";
+			setTimeout(() => {
+				window.location.reload();
+			}, 1000);
+		}
+	}, 1000);
+}
+
 function save_settings() {
-	let form = document.getElementById("settings_form")
+	let form = document.getElementById("settings_form");
 	if (check_validity()) {
-		let json_data = toJSONString(form)
+		let chan = parseInt(document.getElementById("wifi_chan").value);
+		let is5g = chan > 14;
+		let confirmMsg = is5g
+			? "You have selected 5 GHz mode on Channel " + chan + ".\n\nAfter rebooting, the ESP32 will broadcast its Access Point on 5 GHz. Your phone or laptop must support 5 GHz Wi-Fi to reconnect.\n\nSave settings and reboot now?"
+			: "Save all settings and reboot the ESP32 now?";
+		if (!confirm(confirmMsg)) {
+			return;
+		}
+		let json_data = toJSONString(form);
+		show_toast("Saving settings & rebooting ESP32...", "#0058a6");
 		send_json("api/settings", json_data).then(send_response => {
 			console.log(send_response);
-			show_toast(send_response["msg"])
-			get_settings()  // update UI with new settings
+			show_toast(send_response["msg"] || "Settings saved! Rebooting...", "#28a745");
+			show_reboot_status_modal(is5g, chan);
 		}).catch(error => {
-			show_toast(error.message);
+			show_toast(error.message, "#dc3545");
 		});
 	} else {
-		console.log("Form was not filled out correctly.")
+		console.log("Form was not filled out correctly.");
 	}
 }
