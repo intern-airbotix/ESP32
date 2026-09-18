@@ -953,14 +953,11 @@ _Noreturn void control_module_udp_tcp() {
                 write_to_serial(udp_buffer, recv_length);
             }
             // all devices that send us UDP data will be added to the list of UDP receivers
-            // In AP-Mode clients register with their source port and can be removed based on the IP/MAC address.
-            if (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_STA) {
-                // mavesp8266-style: learn only the GCS IP - telemetry always goes to the fixed GCS port,
-                // never back to the sender's source port. All sockets of one GCS host collapse into a
-                // single client entry, so no duplicate streams to ephemeral ports (e.g. Skybrush's
-                // broadcast socket). Idle entries expire via db_remove_expired_udp_clients().
-                new_db_udp_client.udp_client.sin_port = htons(db_sta_gcs_port());
-            }
+            // mavesp8266-style: learn only the GCS IP - telemetry always goes to the fixed GCS port,
+            // never back to the sender's source port. All sockets of one GCS host collapse into a
+            // single client entry, so no duplicate streams to ephemeral ports (e.g. Skybrush's
+            // broadcast socket). Idle entries expire via db_remove_expired_udp_clients().
+            new_db_udp_client.udp_client.sin_port = htons(db_sta_gcs_port());
             add_to_known_udp_clients(udp_conn_list, new_db_udp_client, false);
         } else {
             // received nothing, keep on going

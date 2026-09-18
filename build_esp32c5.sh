@@ -23,7 +23,7 @@ fi
 
 mkdir -p "${CACHE_DIR}/ccache/tmp" "${CACHE_DIR}/npm" "${CACHE_DIR}/pip" "${PROJECT_DIR}/build-codex"
 
-export PATH="${NODE_DIR}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${NODE_DIR}/bin:${PATH}"
 export IDF_TOOLS_PATH="${IDF_TOOLS_DIR}"
 export XDG_CACHE_HOME="${CACHE_DIR}"
 export CCACHE_DIR="${CACHE_DIR}/ccache"
