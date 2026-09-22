@@ -74,6 +74,8 @@
 #define DB_RESET_PIN GPIO_NUM_0
 #elif CONFIG_IDF_TARGET_ESP32
 #define DB_RESET_PIN GPIO_NUM_0
+#elif CONFIG_IDF_TARGET_ESP32C5
+#define DB_RESET_PIN GPIO_NUM_28
 #else
 #define DB_RESET_PIN GPIO_NUM_0
 #endif
@@ -494,60 +496,28 @@ static void db_ap_setup_and_start(wifi_config_t *wifi_config, int wifi_mode) {
     }
 #endif
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-    // A rejected 5 GHz protocol request must not abort: the post-start re-issue and the 2.4 GHz fallback recover.
-    esp_err_t ap_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(db_wifi_set_protocols_for_band(WIFI_IF_AP, protocol_bitmap_2g, desired_band));
 
-    /* esp_wifi_set_config() rejects a channel that is invalid for the band mode the driver is
-       currently in (the driver persists the band mode in NVS, so a reboot starts in the band that was
-       used last), while esp_wifi_set_band_mode() only works after esp_wifi_start(). So configure a
-       placeholder channel that is valid for the current band first, and re-apply the real channel
-       after the band has been switched below. */
-#if CONFIG_SOC_WIFI_SUPPORT_5G
-    wifi_band_mode_t started_band = desired_band;   // band mode the driver is in before esp_wifi_start()
-    if (esp_wifi_get_band_mode(&started_band) != ESP_OK) {
-        started_band = desired_band;    // unknown - assume no switch is needed and let the config decide
-    }
-    if (started_band == desired_band || started_band == WIFI_BAND_MODE_AUTO) {
-        wifi_config->ap.channel = ap_channel;   // the real channel is valid in the current band mode
-    } else {
-        wifi_config->ap.channel = (started_band == WIFI_BAND_MODE_5G_ONLY) ? DB_WIFI_AP_CHANNEL_5G_DEFAULT : 1;
-        ESP_LOGI(TAG, "Wi-Fi driver still in %s mode - using placeholder channel %i until the band is switched",
-                 db_wifi_band_name(started_band), wifi_config->ap.channel);
-    }
-#else
-    wifi_config->ap.channel = ap_channel;
-#endif
-    /* From here on nothing may abort: an unusable band/channel combination is a user setting made via
-       the web interface and must not turn into a boot loop. Errors are collected and answered with a
-       2.4 GHz fallback below - the configuration access point has to come up either way. */
-    esp_err_t config_err = ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_config(WIFI_IF_AP, wifi_config));
-    if (config_err != ESP_OK) {
-        ap_setup_err = config_err;
-    }
-    /* wifi_5g_channel_mask stays 0, which means "5 GHz channels are allowed according to local
-       regulatory rules" (see wifi_country_t in esp_wifi_types_generic.h). The access point channel is
-       additionally restricted to the non-DFS list by db_wifi_ap_channel_5g(). */
     wifi_country_t wifi_country = {.cc = "US", .schan = 1, .nchan = 13, .policy = WIFI_COUNTRY_POLICY_MANUAL};
     ESP_ERROR_CHECK(esp_wifi_set_country(&wifi_country));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
-    /* Start WiFi first — creates lwIP netif, DHCP auto-starts on default IP
-       (only when dhcps_status == INIT). Then stop DHCP, set custom IP, restart. */
+    /* Pre-start configuration. If the channel is invalid for the driver's current NVS band mode,
+       this will fail. We ignore the error and re-apply it after switching the band below. */
+    wifi_config->ap.channel = ap_channel;
+    esp_wifi_set_config(WIFI_IF_AP, wifi_config);
+
+    /* Start WiFi first — creates lwIP netif. Then apply band, protocols, and config. */
     ESP_ERROR_CHECK(esp_wifi_start());
-    if (ap_setup_err == ESP_OK) {
-        ap_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(db_wifi_apply_band(desired_band));
-    }
+    
+    esp_err_t ap_setup_err = ESP_OK;
 #if CONFIG_SOC_WIFI_SUPPORT_5G
+    ap_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(db_wifi_apply_band(desired_band));
     if (ap_setup_err == ESP_OK) {
-        /* esp_wifi_set_protocols() does not touch the 5 GHz bitmap while the driver is in 2.4 GHz only
-           mode and not the 2.4 GHz bitmap while it is in 5 GHz only mode, so the bitmap configured
-           before the switch was dropped. Re-issue it now that the target band is active. */
         ap_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(
                 db_wifi_set_protocols_for_band(WIFI_IF_AP, protocol_bitmap_2g, desired_band));
     }
-    if (ap_setup_err == ESP_OK && started_band != desired_band) {
-        // band switched - now that the target band is active the real channel can be applied
-        wifi_config->ap.channel = ap_channel;
+    if (ap_setup_err == ESP_OK) {
+        // Re-apply the configuration now that the target band is active
         ap_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_config(WIFI_IF_AP, wifi_config));
     }
     if (ap_setup_err != ESP_OK) {
@@ -563,6 +533,10 @@ static void db_ap_setup_and_start(wifi_config_t *wifi_config, int wifi_mode) {
     wifi_band_mode_t active_band = desired_band;
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_get_band_mode(&active_band));
 #else
+    ap_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(db_wifi_set_protocols_for_band(WIFI_IF_AP, protocol_bitmap_2g, desired_band));
+    if (ap_setup_err == ESP_OK) {
+        ap_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_config(WIFI_IF_AP, wifi_config));
+    }
     if (ap_setup_err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to apply the access point configuration: %s", esp_err_to_name(ap_setup_err));
     }
@@ -795,9 +769,9 @@ static void db_start_ap_fallback(void) {
 
 /**
  * Periodically called from the Wi-Fi control task while in STA mode.
- * Reboots if the STA link has been down >= WIFI_STA_CONNECT_TIMEOUT_MS after a prior successful
- * connection (and the radio was not commanded off). On reboot the normal boot flow retries STA
- * and, if the network is still unreachable, falls back to AP via the tested boot path.
+ * Switches to AP mode if the STA link has been down >= WIFI_STA_CONNECT_TIMEOUT_MS after a prior successful
+ * connection (and the radio was not commanded off).  
+ * 
  */
 void db_check_sta_link_timeout(void) {
     if (DB_PARAM_RADIO_MODE != DB_WIFI_MODE_STA) return; // already left STA mode
@@ -809,9 +783,9 @@ void db_check_sta_link_timeout(void) {
     if (!s_sta_was_ever_connected) return;               // never connected -> boot path owns this case
     if (!s_sta_disconnected) return;                     // currently connected -> nothing to do
     if ((xTaskGetTickCount() - s_sta_disconnect_tick) >= pdMS_TO_TICKS(WIFI_STA_CONNECT_TIMEOUT_MS)) {
-        ESP_LOGW(TAG, "STA link down >= %d ms after prior connect - rebooting to retry STA / fall back to AP.",
+        ESP_LOGW(TAG, "STA link down >= %d ms after prior connect - switching to AP mode.",
                  WIFI_STA_CONNECT_TIMEOUT_MS);
-        esp_restart();
+        db_start_ap_fallback();
     }
 }
 
@@ -988,6 +962,20 @@ void short_press_callback(void *arg, void *usr_data) {
 }
 
 /**
+ * Callback for a double press of the reset/boot button.
+ * Sets mode to WiFi access point mode on 5 GHz with default password "dronebridge".
+ */
+void double_press_callback(void *arg, void *usr_data) {
+    ESP_LOGW(TAG, "Double press detected setting wifi mode to 5 GHz access point with password: dronebridge");
+    DB_RADIO_MODE_DESIGNATED = DB_WIFI_MODE_AP;
+    db_param_set_to_default(&db_param_ssid);
+    db_param_set_to_default(&db_param_pass);
+    db_param_wifi_band.value.db_param_u8.value = 1; // 5 GHz
+    db_write_settings_to_nvs();
+    esp_restart();
+}
+
+/**
  * Callback for a long press (>CONFIG_BUTTON_LONG_PRESS_TIME_MS) of the reset/boot button.
  * Resets all settings to defaults.
  * @param arg
@@ -1018,6 +1006,7 @@ void set_reset_trigger() {
         ESP_LOGE(TAG, "Button create failed");
     } else {
         iot_button_register_cb(gpio_btn, BUTTON_SINGLE_CLICK, NULL, short_press_callback, NULL);
+        iot_button_register_cb(gpio_btn, BUTTON_DOUBLE_CLICK, NULL, double_press_callback, NULL);
         iot_button_register_cb(gpio_btn, BUTTON_LONG_PRESS_UP, NULL, long_press_callback, NULL);
     }
 }
