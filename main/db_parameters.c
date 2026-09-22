@@ -909,8 +909,11 @@ void db_param_write_all_params_json(cJSON *root_obj) {
                                         (char *) db_params[i]->value.db_param_str.value);
                 break;
             case UINT8:
-                cJSON_AddNumberToObject(root_obj, (char *) db_params[i]->db_name,
-                                        db_params[i]->value.db_param_u8.value);
+                if (db_params[i] == &db_param_radio_mode) {
+                    cJSON_AddNumberToObject(root_obj, (char *) db_params[i]->db_name, DB_RADIO_MODE_DESIGNATED);
+                } else {
+                    cJSON_AddNumberToObject(root_obj, (char *) db_params[i]->db_name, db_params[i]->value.db_param_u8.value);
+                }
                 break;
             case UINT16:
                 cJSON_AddNumberToObject(root_obj, (char *) db_params[i]->db_name,
