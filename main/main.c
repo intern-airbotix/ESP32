@@ -338,23 +338,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
             return;
         }
         ESP_LOGI(TAG, "WIFI_EVENT_STA_START - Wifi Started");
-        const wifi_band_mode_t sta_band = db_wifi_effective_band(DB_WIFI_MODE_STA);
-        esp_err_t band_err = db_wifi_apply_band(sta_band);
-        if (band_err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to select the %s Wi-Fi band: %s", db_wifi_band_name(sta_band),
-                     esp_err_to_name(band_err));
-            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-            return;
-        }
-        /* The protocol bitmaps configured in db_init_wifi_clientmode() were applied while the driver
-           was still in the band mode persisted from the last boot, and esp_wifi_set_protocols() skips
-           the bitmap of the band it is not in. Re-issue them now that the target band is active.
-           Switching the band restarts the STA interface and raises a second WIFI_EVENT_STA_START;
-           db_wifi_apply_band() is then a no-op and this call simply re-applies the same bitmap. */
-#if CONFIG_SOC_WIFI_SUPPORT_5G
-        ESP_ERROR_CHECK_WITHOUT_ABORT(
-                db_wifi_set_protocols_for_band(WIFI_IF_STA, db_wifi_sta_protocol_bitmap_2g(), sta_band));
-#endif
+
         if (!DB_RADIO_IS_OFF) {  // maybe the other task did set it in the meantime
             ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
         } else {
@@ -469,6 +453,16 @@ esp_err_t init_fs(void) {
 #endif
 
 /**
+ * Applies the DroneBridge regulatory/country configuration. Must be applied to every interface that
+ * uses Wi-Fi (AP and STA) - previously this was only done in the AP path, which meant STA mode fell
+ * back to the SDK's default regulatory domain and could silently reject valid 5 GHz channels.
+ */
+static void db_wifi_apply_country_config(wifi_country_policy_t policy) {
+    wifi_country_t wifi_country = {.cc = "US", .schan = 1, .nchan = 13, .policy = policy};
+    ESP_ERROR_CHECK(esp_wifi_set_country(&wifi_country));
+}
+
+/**
  * Configures and starts the AP after mode/netif are set up.
  * Shared between initial AP init and STA->AP fallback. Decides the effective band and channel of the
  * access point from the wifi_band/wifi_chan/wifi_chan_5g parameters - the caller does not set
@@ -497,8 +491,7 @@ static void db_ap_setup_and_start(wifi_config_t *wifi_config, int wifi_mode) {
 #endif
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
 
-    wifi_country_t wifi_country = {.cc = "US", .schan = 1, .nchan = 13, .policy = WIFI_COUNTRY_POLICY_MANUAL};
-    ESP_ERROR_CHECK(esp_wifi_set_country(&wifi_country));
+    db_wifi_apply_country_config(WIFI_COUNTRY_POLICY_MANUAL);
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
     /* Pre-start configuration. If the channel is invalid for the driver's current NVS band mode,
@@ -655,7 +648,15 @@ int db_init_wifi_clientmode() {
             .sta = {
                     .ssid = "DroneBridge_ESP32_Init",
                     .password = "dronebridge",
-                    .threshold.authmode = WIFI_AUTH_WEP
+                    .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+                    .pmf_cfg = {
+                        .capable = true,
+                        .required = false
+                    },
+                    .scan_method = WIFI_ALL_CHANNEL_SCAN,
+                    .rm_enabled = 1,
+                    .btm_enabled = 1,
+                    .sae_pwe_h2e = WPA3_SAE_PWE_BOTH
             },
     };
 #pragma GCC diagnostic push
@@ -676,6 +677,7 @@ int db_init_wifi_clientmode() {
 #pragma GCC diagnostic pop
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    db_wifi_apply_country_config(WIFI_COUNTRY_POLICY_MANUAL);   // <-- new: must be set before esp_wifi_start() for 5 GHz to be allowed
     // The band mode itself can only be selected once the driver is started (WIFI_EVENT_STA_START), but the
     // protocols of both bands must be configured before that. The WIFI_EVENT_STA_START handler re-issues
     // the bitmap for the band that ends up being active.
@@ -684,6 +686,25 @@ int db_init_wifi_clientmode() {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE)); // disable power saving
     ESP_ERROR_CHECK(esp_wifi_start());
+    
+    // Apply band immediately after start so the driver can restart synchronously if needed,
+    // rather than looping infinitely in the event handler due to RAM storage wiping state.
+    esp_err_t sta_setup_err = ESP_OK;
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    sta_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(db_wifi_apply_band(sta_band));
+    if (sta_setup_err == ESP_OK) {
+        sta_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(
+                db_wifi_set_protocols_for_band(WIFI_IF_STA, db_wifi_sta_protocol_bitmap_2g(), sta_band));
+    }
+    if (sta_setup_err == ESP_OK) {
+        // Re-apply the configuration now that the target band is active
+        sta_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    }
+    if (sta_setup_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to apply STA configuration for %s", db_wifi_band_name(sta_band));
+    }
+#endif
+
     DB_RADIO_IS_OFF = false; // just to be sure, but should not be necessary
     // Consider connection lost after 1s of no beacon - triggers reconnect via WIFI_EVENT_STA_DISCONNECTED event
     ESP_ERROR_CHECK(esp_wifi_set_inactive_time(WIFI_IF_STA, 3));
