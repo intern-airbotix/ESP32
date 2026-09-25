@@ -351,6 +351,18 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
             return;  // no longer in STA mode - ignore stale event
         }
         ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED - Lost connection to access point");
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+        if (DB_PARAM_WIFI_BAND == DB_WIFI_BAND_AUTO) {
+            wifi_band_mode_t cur_band = WIFI_BAND_MODE_AUTO;
+            esp_wifi_get_band_mode(&cur_band);
+            if (cur_band == WIFI_BAND_MODE_5G_ONLY) {
+                ESP_LOGW(TAG, "5 GHz connection lost/failed. Falling back to dual band (Auto) to find 2.4 GHz.");
+                ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_band_mode(WIFI_BAND_MODE_AUTO));
+                // Driver restarts; STA_START will fire and esp_wifi_connect will be called automatically in AUTO mode.
+                return;
+            }
+        }
+#endif
         // Keep on trying
         if (!DB_RADIO_IS_OFF) {
             ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
@@ -656,6 +668,7 @@ int db_init_wifi_clientmode() {
                     .scan_method = WIFI_ALL_CHANNEL_SCAN,
                     .rm_enabled = 1,
                     .btm_enabled = 1,
+                    .mbo_enabled = 1,
                     .sae_pwe_h2e = WPA3_SAE_PWE_BOTH
             },
     };
@@ -681,29 +694,33 @@ int db_init_wifi_clientmode() {
     // The band mode itself can only be selected once the driver is started (WIFI_EVENT_STA_START), but the
     // protocols of both bands must be configured before that. The WIFI_EVENT_STA_START handler re-issues
     // the bitmap for the band that ends up being active.
-    const wifi_band_mode_t sta_band = db_wifi_effective_band(DB_WIFI_MODE_STA);
+    wifi_band_mode_t sta_band = db_wifi_effective_band(DB_WIFI_MODE_STA);
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    if (sta_band == WIFI_BAND_MODE_AUTO) {
+        sta_band = WIFI_BAND_MODE_5G_ONLY;
+        ESP_LOGI(TAG, "STA Auto mode: Forcing 5 GHz initially. Will fallback to 2.4 GHz on drop.");
+    }
+#endif
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    wifi_band_mode_t current_band = WIFI_BAND_MODE_AUTO;
+    if (esp_wifi_get_band_mode(&current_band) != ESP_OK || current_band != sta_band) {
+        ESP_LOGI(TAG, "Safely switching Wi-Fi band to %s before STA configuration", db_wifi_band_name(sta_band));
+        // We temporarily disable radio so the STA_START event handler doesn't call esp_wifi_connect during the switch
+        DB_RADIO_IS_OFF = true; 
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_start());
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_band_mode(sta_band));
+        vTaskDelay(pdMS_TO_TICKS(500)); // Give the Wi-Fi task time to asynchronously restart into the new band
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_stop());
+        DB_RADIO_IS_OFF = false;
+    }
+#endif
+
     ESP_ERROR_CHECK(db_wifi_set_protocols_for_band(WIFI_IF_STA, db_wifi_sta_protocol_bitmap_2g(), sta_band));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE)); // disable power saving
     ESP_ERROR_CHECK(esp_wifi_start());
     
-    // Apply band immediately after start so the driver can restart synchronously if needed,
-    // rather than looping infinitely in the event handler due to RAM storage wiping state.
-    esp_err_t sta_setup_err = ESP_OK;
-#if CONFIG_SOC_WIFI_SUPPORT_5G
-    sta_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(db_wifi_apply_band(sta_band));
-    if (sta_setup_err == ESP_OK) {
-        sta_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(
-                db_wifi_set_protocols_for_band(WIFI_IF_STA, db_wifi_sta_protocol_bitmap_2g(), sta_band));
-    }
-    if (sta_setup_err == ESP_OK) {
-        // Re-apply the configuration now that the target band is active
-        sta_setup_err = ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    }
-    if (sta_setup_err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to apply STA configuration for %s", db_wifi_band_name(sta_band));
-    }
-#endif
+
 
     DB_RADIO_IS_OFF = false; // just to be sure, but should not be necessary
     // Consider connection lost after 1s of no beacon - triggers reconnect via WIFI_EVENT_STA_DISCONNECTED event
