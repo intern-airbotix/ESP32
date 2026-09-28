@@ -356,10 +356,15 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
             wifi_band_mode_t cur_band = WIFI_BAND_MODE_AUTO;
             esp_wifi_get_band_mode(&cur_band);
             if (cur_band == WIFI_BAND_MODE_5G_ONLY) {
-                ESP_LOGW(TAG, "5 GHz connection lost/failed. Falling back to dual band (Auto) to find 2.4 GHz.");
-                ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_band_mode(WIFI_BAND_MODE_AUTO));
-                // Driver restarts; STA_START will fire and esp_wifi_connect will be called automatically in AUTO mode.
-                return;
+                if (s_sta_was_ever_connected || s_retry_num >= 3) {
+                    ESP_LOGW(TAG, "5 GHz connection lost/failed. Falling back to dual band (Auto) to find 2.4 GHz.");
+                    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY));
+                    s_retry_num = 0;
+                    // Driver restarts; STA_START will fire and esp_wifi_connect will be called automatically in AUTO mode.
+                    return;
+                } else {
+                    ESP_LOGI(TAG, "5 GHz connection attempt failed (retry %i). Retrying on 5 GHz before fallback...", s_retry_num);
+                }
             }
         }
 #endif
@@ -701,24 +706,27 @@ int db_init_wifi_clientmode() {
         ESP_LOGI(TAG, "STA Auto mode: Forcing 5 GHz initially. Will fallback to 2.4 GHz on drop.");
     }
 #endif
-#if CONFIG_SOC_WIFI_SUPPORT_5G
-    wifi_band_mode_t current_band = WIFI_BAND_MODE_AUTO;
-    if (esp_wifi_get_band_mode(&current_band) != ESP_OK || current_band != sta_band) {
-        ESP_LOGI(TAG, "Safely switching Wi-Fi band to %s before STA configuration", db_wifi_band_name(sta_band));
-        // We temporarily disable radio so the STA_START event handler doesn't call esp_wifi_connect during the switch
-        DB_RADIO_IS_OFF = true; 
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_start());
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_band_mode(sta_band));
-        vTaskDelay(pdMS_TO_TICKS(500)); // Give the Wi-Fi task time to asynchronously restart into the new band
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_stop());
-        DB_RADIO_IS_OFF = false;
-    }
-#endif
-
     ESP_ERROR_CHECK(db_wifi_set_protocols_for_band(WIFI_IF_STA, db_wifi_sta_protocol_bitmap_2g(), sta_band));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE)); // disable power saving
+
+    // Disable connect-on-start in the event handler to prevent race conditions during band switch
+    DB_RADIO_IS_OFF = true;
     ESP_ERROR_CHECK(esp_wifi_start());
+
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    wifi_band_mode_t current_band = WIFI_BAND_MODE_AUTO;
+    if (esp_wifi_get_band_mode(&current_band) != ESP_OK || current_band != sta_band) {
+        ESP_LOGI(TAG, "Switching Wi-Fi band to %s after driver start", db_wifi_band_name(sta_band));
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_band_mode(sta_band));
+        // Wait for the background driver restart to complete
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+#endif
+
+    // Re-enable radio and manually trigger the connection now that the band is fully established
+    DB_RADIO_IS_OFF = false;
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
     
 
 
@@ -1150,6 +1158,7 @@ void app_main() {
     db_timer_start_mavlink_heartbeat();
     db_timer_start_mavlink_radio_status();
     db_timer_start_status_led();
+    db_timer_start_wifi_rssi_timer();
 
     if (DB_PARAM_RADIO_MODE != DB_WIFI_MODE_ESPNOW_AIR && DB_PARAM_RADIO_MODE != DB_WIFI_MODE_ESPNOW_GND &&
         DB_PARAM_RADIO_MODE != DB_WIFI_MODE_AP_LR) {

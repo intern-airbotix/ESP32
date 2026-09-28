@@ -35,10 +35,31 @@ void db_timer_wifi_rssi_callback(TimerHandle_t pxTimer) {
   // This function is called periodically by the FreeRTOS timer
   if (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_STA) {
     // update rssi variable - set to -127 when not available
-    if (esp_wifi_sta_get_rssi((int *) &db_esp_signal_quality.air_rssi) != ESP_OK) {
+    int rssi_temp = -127;
+    if (esp_wifi_sta_get_rssi(&rssi_temp) != ESP_OK) {
       db_esp_signal_quality.air_rssi = -127;
-      ESP_LOGE(TAG, "Failed to get RSSI");
-    } else {/* all good */}
+      ESP_LOGD(TAG, "Failed to get RSSI (likely scanning/connecting)");
+    } else {
+      db_esp_signal_quality.air_rssi = rssi_temp;
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+        wifi_band_mode_t cur_band = WIFI_BAND_MODE_AUTO;
+        esp_wifi_get_band_mode(&cur_band);
+        
+        static int dbg_log = 0;
+        if (dbg_log++ % 5 == 0) {
+            ESP_LOGI(TAG, "ROAM DEBUG: rssi=%i, config_band=%i, current_radio_band=%i", db_esp_signal_quality.air_rssi, DB_PARAM_WIFI_BAND, cur_band);
+        }
+
+        if (DB_PARAM_WIFI_BAND == DB_WIFI_BAND_AUTO) {
+            // Proactively switch to 2.4 GHz if 5 GHz drops below -70 dBm
+            if (cur_band == WIFI_BAND_MODE_5G_ONLY && db_esp_signal_quality.air_rssi < -70) {
+                ESP_LOGW(TAG, "5 GHz signal is poor (%i dBm). Proactively switching to 2.4 GHz...", db_esp_signal_quality.air_rssi);
+                ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY));
+                // Driver restarts instantly; STA_START will fire and esp_wifi_connect will find the stronger 2.4 GHz
+            }
+        }
+#endif
+    }
   } else if (DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP || DB_PARAM_RADIO_MODE == DB_WIFI_MODE_AP_LR) {
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_ap_get_sta_list(&wifi_sta_list)); // update list of connected stations
   }
